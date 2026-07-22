@@ -1,120 +1,145 @@
 """
 Relatório Diário — orquestra tudo:
-  1. Roda o screener na watchlist
-  2. Para os melhores setups, checa notícias de risco (pode cancelar o sinal)
-  3. Calcula stop/alvo (ATR + suporte/resistência)
-  4. Sugere parâmetros de opção (strike/vencimento)
-  5. Monta o relatório e envia no Telegram (texto + gráfico)
+  1. Roda o screener em toda a watchlist, avaliando cada ativo de 0 a 10
+  2. Manda TODOS os gráficos juntos, num álbum só
+  3. Manda um resumo em texto, ranqueado do nível mais alto pro mais baixo
+  4. Para os ativos com nível alto (>= NIVEL_DETALHE), checa notícias de
+     risco, calcula stop/alvo e sugere strike/vencimento de opção
 
 USO:
     python relatorio_diario.py
 
-Agende isso pra rodar todo dia de manhã (antes ou logo após a abertura do
-pregão) usando cron (Linux/Mac) ou o Agendador de Tarefas (Windows).
-Exemplo de cron, rodando 10:15 em dias úteis:
-    15 10 * * 1-5 cd /caminho/do/projeto && /usr/bin/python3 relatorio_diario.py
+Agende isso pra rodar todo dia de manhã usando GitHub Actions (veja o
+README), cron (Linux/Mac) ou o Agendador de Tarefas (Windows).
 """
 
 import os
+from datetime import date
+
 import config
-from screener import rodar_screener, melhores_setups
+from screener import rodar_screener
 from noticias import checar_risco_noticias
 from opcoes import sugerir_parametros_opcao
 from b3_swing_analyzer import sugerir_stop_alvo, plotar_grafico
-from telegram_utils import enviar_mensagem, enviar_imagem
+from telegram_utils import enviar_mensagem, enviar_album
 
 PASTA_GRAFICOS = "graficos_tmp"
 
 
-def tag_curta(motivo: str) -> str:
-    """Reduz uma frase de motivo ao termo curto entre parênteses, se houver."""
-    if "(" in motivo and ")" in motivo:
-        return motivo.split("(")[-1].rstrip(")")
-    return motivo
-
-
-def montar_relatorio_ativo(resultado: dict, direcao: str) -> tuple:
-    """Monta um bloco CURTO e prático para um ativo. Retorna (texto, caminho_grafico)."""
+def montar_bloco_resumo(resultado: dict) -> str:
+    """
+    Monta o bloco de texto para UM ativo no resumo final.
+    Ativos com nível >= NIVEL_DETALHE ganham plano de entrada completo
+    (stop, alvo, opção sugerida). Os demais ficam só com o nível e os motivos,
+    pra você ver o panorama geral sem poluir a leitura.
+    """
     ticker = resultado["ticker"]
-    df = resultado["df"]
+    score = resultado["score"]
+    direcao = resultado["direcao"]
+    emoji = "🟢" if direcao == "compra" else "🔴"
+    palavra = "COMPRA" if direcao == "compra" else "VENDA"
 
-    # 1. Checa notícias de risco
+    cabecalho = f"{emoji} <b>{ticker} — {score}/10 ({palavra})</b>"
+    motivos_txt = "\n".join(f"  • {m}" for m in resultado["motivos"])
+
+    if score < config.NIVEL_DETALHE:
+        # Nível baixo: só mostra o panorama, sem plano de entrada
+        return f"{cabecalho}\n{motivos_txt}"
+
+    # Nível alto: checa notícias antes de dar o plano completo
     nome_empresa = config.NOME_EMPRESA.get(ticker, ticker)
     risco_noticias = checar_risco_noticias(nome_empresa)
 
     if risco_noticias["bloquear_entrada"]:
         motivo_bloqueio = risco_noticias["alertas"][0]["motivo"]
-        texto = f"🚫 <b>{ticker}</b> — sinal de {direcao.upper()} cancelado (notícia: {motivo_bloqueio})"
-        return texto, None
+        return (
+            f"{cabecalho}\n{motivos_txt}\n"
+            f"  🚫 <b>Plano de entrada CANCELADO</b> — notícia de risco encontrada: {motivo_bloqueio}"
+        )
 
-    # 2. Stop e alvo
+    df = resultado["df"]
     stop_alvo = sugerir_stop_alvo(df, direcao)
-
-    # 3. Sugestão de opção
     opcao = sugerir_parametros_opcao(resultado["preco"], direcao)
 
-    palavra = "COMPRAR" if direcao == "compra" else "VENDER"
-    emoji = "🟢" if direcao == "compra" else "🔴"
-    tags = [tag_curta(m) for m in resultado["motivos"][:3]]
+    explicacao_opcao = (
+        "uma CALL é a opção que lucra se o ativo SOBE"
+        if opcao["tipo_opcao"] == "CALL"
+        else "uma PUT é a opção que lucra se o ativo CAI"
+    )
 
-    texto = (
-        f"{emoji} <b>{palavra} {ticker}</b>  |  R$ {resultado['preco']:.2f}\n"
-        f"Entrada {stop_alvo['preco_entrada']} → Stop {stop_alvo['stop']} → Alvo {stop_alvo['alvo']}\n"
-        f"Opção: {opcao['tipo_opcao']} strike ~{opcao['strike_sugerido_aprox']}, "
-        f"venc. {opcao['vencimento_sugerido']}\n"
-        f"Motivo: {' + '.join(tags)}"
+    plano = (
+        f"{cabecalho}\n{motivos_txt}\n"
+        f"  <b>Preço atual:</b> R$ {resultado['preco']:.2f}\n"
+        f"  <b>Plano sugerido:</b> entrar perto de R$ {stop_alvo['preco_entrada']} · "
+        f"sair no prejuízo (stop) se cair a R$ {stop_alvo['stop']} · "
+        f"realizar lucro (alvo) perto de R$ {stop_alvo['alvo']}\n"
+        f"  <b>Opção sugerida:</b> {opcao['tipo_opcao']}, strike próximo de "
+        f"R$ {opcao['strike_sugerido_aprox']}, vencimento {opcao['vencimento_sugerido']} "
+        f"— {explicacao_opcao}.\n"
+        f"  ⚠️ Confira a liquidez dessa opção no seu home broker antes de operar."
     )
 
     if risco_noticias["positivas"]:
-        texto += f"\n✅ Notícia favorável: {risco_noticias['positivas'][0]['titulo']}"
+        plano += f"\n  ✅ Notícia recente favorável: {risco_noticias['positivas'][0]['titulo']}"
 
-    # Gera gráfico
-    os.makedirs(PASTA_GRAFICOS, exist_ok=True)
-    caminho_grafico = os.path.join(PASTA_GRAFICOS, f"{ticker}.png")
-    plotar_grafico(df, ticker, caminho_grafico)
-
-    return texto, caminho_grafico
+    return plano
 
 
-def gerar_e_enviar_relatorio(enviar_graficos: bool = True):
-    from datetime import date
-
-    print("Rodando screener...")
-    resultados = rodar_screener(periodo=config.PERIODO_HISTORICO)
-    melhores = melhores_setups(resultados, top_n=config.TOP_N_SETUPS)
-
-    total_setups = len(melhores["compras"]) + len(melhores["vendas"])
+def gerar_e_enviar_relatorio():
+    print("Rodando screener em toda a watchlist...")
+    resultados = rodar_screener(watchlist=config.WATCHLIST, periodo=config.PERIODO_HISTORICO)
     hoje = date.today().strftime("%d/%m/%Y")
 
-    if total_setups == 0:
+    if not resultados:
         enviar_mensagem(
             config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID,
-            f"📊 <b>Relatório {hoje}</b>\nNenhum setup com confluência forte hoje. Sem operações sugeridas."
+            f"📊 <b>Relatório {hoje}</b>\nNão consegui baixar dados de nenhum ativo hoje. Verifique a watchlist."
         )
-        print("Nenhum setup encontrado. Mensagem enviada.")
+        print("Nenhum resultado. Mensagem enviada.")
         return
 
-    print("Checando notícias e montando blocos...")
-    blocos = []
-    graficos = []
-    for r in melhores["compras"] + melhores["vendas"]:
-        direcao = "compra" if r["pontos"] > 0 else "venda"
-        texto, grafico = montar_relatorio_ativo(r, direcao)
-        blocos.append(texto)
-        if grafico:
-            graficos.append((r["ticker"], grafico))
+    print("Gerando gráficos...")
+    os.makedirs(PASTA_GRAFICOS, exist_ok=True)
+    caminhos_graficos = []
+    for r in resultados:
+        caminho = os.path.join(PASTA_GRAFICOS, f"{r['ticker']}.png")
+        plotar_grafico(r["df"], r["ticker"], caminho)
+        caminhos_graficos.append(caminho)
 
-    mensagem_final = f"📊 <b>Relatório B3 — {hoje}</b>\n\n" + "\n\n".join(blocos)
-    mensagem_final += (
-        "\n\n⚠️ Apoio técnico automatizado, não é recomendação de investimento. "
-        "Confirme liquidez da opção e valide com sua gestão de risco."
+    print("Checando notícias e montando resumo...")
+    blocos = [montar_bloco_resumo(r) for r in resultados]
+
+    mensagem_final = (
+        f"📊 <b>Relatório B3 — {hoje}</b>\n"
+        f"Ranking de {len(resultados)} ativo(s), do nível mais alto pro mais baixo.\n"
+        f"Plano de entrada completo só a partir de {config.NIVEL_DETALHE}/10 "
+        f"(confluência mais forte de indicadores).\n\n"
+        + "\n\n".join(blocos)
+        + "\n\n⚠️ Apoio técnico automatizado, não é recomendação de investimento. "
+          "Confirme liquidez da opção e valide com sua própria gestão de risco."
     )
 
-    enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, mensagem_final)
+    print("Enviando álbum de gráficos...")
+    enviar_album(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, caminhos_graficos)
 
-    if enviar_graficos:
-        for ticker, grafico in graficos:
-            enviar_imagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, grafico, legenda=ticker)
+    print("Enviando resumo em texto...")
+    # Telegram limita ~4096 caracteres por mensagem; quebra em partes se precisar
+    LIMITE = 3800
+    if len(mensagem_final) <= LIMITE:
+        enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, mensagem_final)
+    else:
+        partes = []
+        atual = ""
+        for bloco in mensagem_final.split("\n\n"):
+            if len(atual) + len(bloco) + 2 > LIMITE:
+                partes.append(atual)
+                atual = bloco
+            else:
+                atual = f"{atual}\n\n{bloco}" if atual else bloco
+        if atual:
+            partes.append(atual)
+        for parte in partes:
+            enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, parte)
 
     print("Relatório enviado com sucesso.")
 
