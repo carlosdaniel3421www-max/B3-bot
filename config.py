@@ -15,16 +15,23 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "COLOQUE_SEU_CHAT_ID_AQUI"
 OPLAB_TOKEN = os.environ.get("OPLAB_TOKEN", "")  # deixe vazio se não tiver
 
 # --- Screener ---
-TOP_N_SETUPS = 3          # quantos melhores setups de compra/venda reportar
+# Ativos que você opera.
+WATCHLIST = [
+    "PETR4", "VALE3", "ITUB4", "BBAS3", "WEGE3", "BBDC4", "PRIO3",
+    "SUZB3", "B3SA3", "ELET3", "ELET6", "ABEV3", "RENT3", "EQTL3",
+    "JBSS3", "CMIG4", "GGBR4", "USIM5", "RAIL3", "LREN3",
+]
+
+NIVEL_DETALHE = 6          # nível mínimo (0-10) para receber plano de entrada completo
 PERIODO_HISTORICO = "6mo"  # período de dados baixado para os cálculos
 
 # --- Nomes de empresas para busca de notícias (Google News busca melhor por nome) ---
 NOME_EMPRESA = {
     "PETR4": "Petrobras", "VALE3": "Vale", "ITUB4": "Itaú Unibanco",
-    "BBDC4": "Bradesco", "BBAS3": "Banco do Brasil", "B3SA3": "B3",
-    "ABEV3": "Ambev", "WEGE3": "WEG", "RENT3": "Localiza",
-    "SUZB3": "Suzano", "PRIO3": "PetroRio", "RADL3": "Raia Drogasil",
-    "EQTL3": "Equatorial Energia", "GGBR4": "Gerdau", "LREN3": "Lojas Renner",
-    "RAIL3": "Rumo", "HAPV3": "Hapvida", "CSNA3": "CSN", "ELET3": "Eletrobras",
-    "ITSA4": "Itaúsa",
+    "BBAS3": "Banco do Brasil", "WEGE3": "WEG", "BBDC4": "Bradesco",
+    "PRIO3": "PetroRio", "SUZB3": "Suzano", "B3SA3": "B3",
+    "ELET3": "Eletrobras", "ELET6": "Eletrobras", "ABEV3": "Ambev",
+    "RENT3": "Localiza", "EQTL3": "Equatorial Energia", "JBSS3": "JBS",
+    "CMIG4": "Cemig", "GGBR4": "Gerdau", "USIM5": "Usiminas",
+    "RAIL3": "Rumo", "LREN3": "Lojas Renner",
 }
