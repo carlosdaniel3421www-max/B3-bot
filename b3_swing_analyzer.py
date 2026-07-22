@@ -163,70 +163,102 @@ def sugerir_stop_alvo(df: pd.DataFrame, direcao: str) -> dict:
 # 3. PLACAR DE CONFLUÊNCIA (heurística simples, não é garantia de nada)
 # --------------------------------------------------------------------------
 
-def gerar_placar(df: pd.DataFrame) -> dict:
+def avaliar_ativo(df: pd.DataFrame) -> dict:
+    """
+    Avalia o ativo com placar de 0 a 10 para COMPRA e para VENDA,
+    e retorna a direção de maior placar. Cada uma das 5 categorias de
+    indicador vale até 2 pontos, dependendo da força do sinal.
+    """
     ultimo = df.iloc[-1]
-    pontos = 0
-    motivos = []
+    penultimo = df.iloc[-2] if len(df) > 1 else ultimo
 
-    # Tendência
-    if ultimo["close"] > ultimo["sma21"] > ultimo["sma50"]:
-        pontos += 1
-        motivos.append("Preço acima da SMA21 e SMA21 acima da SMA50 (tendência de alta)")
+    pontos_compra, pontos_venda = 0, 0
+    motivos_compra, motivos_venda = [], []
+
+    # --- Tendência (médias móveis) — até 2 pontos ---
+    if ultimo["close"] > ultimo["sma21"] > ultimo["sma50"] > ultimo["sma200"]:
+        pontos_compra += 2
+        motivos_compra.append("Tendência de alta confirmada nas médias de curto, médio e longo prazo")
+    elif ultimo["close"] > ultimo["sma21"] > ultimo["sma50"]:
+        pontos_compra += 1
+        motivos_compra.append("Tendência de alta no curto/médio prazo")
+    elif ultimo["close"] < ultimo["sma21"] < ultimo["sma50"] < ultimo["sma200"]:
+        pontos_venda += 2
+        motivos_venda.append("Tendência de baixa confirmada nas médias de curto, médio e longo prazo")
     elif ultimo["close"] < ultimo["sma21"] < ultimo["sma50"]:
-        pontos -= 1
-        motivos.append("Preço abaixo da SMA21 e SMA21 abaixo da SMA50 (tendência de baixa)")
+        pontos_venda += 1
+        motivos_venda.append("Tendência de baixa no curto/médio prazo")
 
-    # RSI
-    if ultimo["rsi"] < 30:
-        pontos += 1
-        motivos.append(f"RSI em {ultimo['rsi']:.1f} (zona de sobrevenda)")
+    # --- RSI — até 2 pontos ---
+    if ultimo["rsi"] < 20:
+        pontos_compra += 2
+        motivos_compra.append(f"RSI em {ultimo['rsi']:.0f} — sobrevenda forte (ativo muito descontado no curto prazo)")
+    elif ultimo["rsi"] < 30:
+        pontos_compra += 1
+        motivos_compra.append(f"RSI em {ultimo['rsi']:.0f} — zona de sobrevenda")
+    elif ultimo["rsi"] > 80:
+        pontos_venda += 2
+        motivos_venda.append(f"RSI em {ultimo['rsi']:.0f} — sobrecompra forte (ativo muito esticado no curto prazo)")
     elif ultimo["rsi"] > 70:
-        pontos -= 1
-        motivos.append(f"RSI em {ultimo['rsi']:.1f} (zona de sobrecompra)")
+        pontos_venda += 1
+        motivos_venda.append(f"RSI em {ultimo['rsi']:.0f} — zona de sobrecompra")
 
-    # MACD
-    if ultimo["macd"] > ultimo["macd_sinal"] and ultimo["macd_hist"] > 0:
-        pontos += 1
-        motivos.append("MACD acima da linha de sinal (momentum positivo)")
-    elif ultimo["macd"] < ultimo["macd_sinal"] and ultimo["macd_hist"] < 0:
-        pontos -= 1
-        motivos.append("MACD abaixo da linha de sinal (momentum negativo)")
+    # --- MACD — até 2 pontos ---
+    hist_cresceu = ultimo["macd_hist"] > penultimo["macd_hist"]
+    if ultimo["macd"] > ultimo["macd_sinal"]:
+        pts = 2 if hist_cresceu else 1
+        pontos_compra += pts
+        extra = " e ganhando força" if hist_cresceu else ""
+        motivos_compra.append(f"MACD acima da linha de sinal (momentum comprador{extra})")
+    else:
+        pts = 2 if not hist_cresceu else 1
+        pontos_venda += pts
+        extra = " e perdendo força" if not hist_cresceu else ""
+        motivos_venda.append(f"MACD abaixo da linha de sinal (momentum vendedor{extra})")
 
-    # Estocástico
-    if ultimo["stoch_k"] < 20:
-        pontos += 1
-        motivos.append(f"Estocástico em {ultimo['stoch_k']:.1f} (sobrevenda)")
+    # --- Estocástico — até 2 pontos ---
+    if ultimo["stoch_k"] < 10:
+        pontos_compra += 2
+        motivos_compra.append(f"Estocástico em {ultimo['stoch_k']:.0f} — sobrevenda extrema")
+    elif ultimo["stoch_k"] < 20:
+        pontos_compra += 1
+        motivos_compra.append(f"Estocástico em {ultimo['stoch_k']:.0f} — sobrevenda")
+    elif ultimo["stoch_k"] > 90:
+        pontos_venda += 2
+        motivos_venda.append(f"Estocástico em {ultimo['stoch_k']:.0f} — sobrecompra extrema")
     elif ultimo["stoch_k"] > 80:
-        pontos -= 1
-        motivos.append(f"Estocástico em {ultimo['stoch_k']:.1f} (sobrecompra)")
+        pontos_venda += 1
+        motivos_venda.append(f"Estocástico em {ultimo['stoch_k']:.0f} — sobrecompra")
 
-    # Proximidade de suporte/resistência
+    # --- Suporte/Resistência + volume — até 2 pontos ---
     faixa = ultimo["resistencia"] - ultimo["suporte"]
     if faixa > 0:
         dist_suporte = (ultimo["close"] - ultimo["suporte"]) / faixa
-        if dist_suporte < 0.1:
-            pontos += 1
-            motivos.append("Preço próximo do suporte recente")
-        elif dist_suporte > 0.9:
-            pontos -= 1
-            motivos.append("Preço próximo da resistência recente")
+        media_volume = df["volume"].rolling(20).mean().iloc[-1]
+        volume_alto = ultimo["volume"] > media_volume
+        if dist_suporte < 0.05:
+            pts = 2 if volume_alto else 1
+            pontos_compra += pts
+            extra = " com volume acima da média (mais força na reação)" if volume_alto else ""
+            motivos_compra.append(f"Preço encostando no suporte recente{extra}")
+        elif dist_suporte > 0.95:
+            pts = 2 if volume_alto else 1
+            pontos_venda += pts
+            extra = " com volume acima da média (mais força na reação)" if volume_alto else ""
+            motivos_venda.append(f"Preço encostando na resistência recente{extra}")
 
-    # Volume vs VWAP
-    if ultimo["close"] > ultimo["vwap"]:
-        motivos.append("Preço acima da VWAP móvel (força compradora)")
+    if pontos_compra >= pontos_venda:
+        direcao = "compra"
+        score = pontos_compra
+        motivos = motivos_compra or ["Nenhum indicador com sinal relevante no momento"]
     else:
-        motivos.append("Preço abaixo da VWAP móvel (força vendedora)")
-
-    if pontos >= 2:
-        classificacao = "POSSÍVEL ENTRADA DE COMPRA"
-    elif pontos <= -2:
-        classificacao = "POSSÍVEL ENTRADA DE VENDA"
-    else:
-        classificacao = "SEM CONFLUÊNCIA CLARA (aguardar)"
+        direcao = "venda"
+        score = pontos_venda
+        motivos = motivos_venda or ["Nenhum indicador com sinal relevante no momento"]
 
     return {
-        "pontos": pontos,
-        "classificacao": classificacao,
+        "direcao": direcao,
+        "score": score,
         "motivos": motivos,
         "preco_atual": ultimo["close"],
         "data": df.index[-1],
@@ -304,16 +336,15 @@ def main():
     print("Calculando indicadores...")
     df = calcular_indicadores(df)
 
-    placar = gerar_placar(df)
+    avaliacao = avaliar_ativo(df)
 
     print("\n" + "=" * 60)
-    print(f"ATIVO: {args.ticker.upper()}  |  DATA: {placar['data'].date()}")
-    print(f"PREÇO ATUAL: R$ {placar['preco_atual']:.2f}")
-    print(f"PLACAR DE CONFLUÊNCIA: {placar['pontos']:+d}")
-    print(f"CLASSIFICAÇÃO: {placar['classificacao']}")
+    print(f"ATIVO: {args.ticker.upper()}  |  DATA: {avaliacao['data'].date()}")
+    print(f"PREÇO ATUAL: R$ {avaliacao['preco_atual']:.2f}")
+    print(f"NÍVEL: {avaliacao['score']}/10 — {avaliacao['direcao'].upper()}")
     print("-" * 60)
     print("Motivos considerados:")
-    for m in placar["motivos"]:
+    for m in avaliacao["motivos"]:
         print(f"  • {m}")
     print("=" * 60)
     print("\nAVISO: Ferramenta de apoio técnico, não é recomendação de")
