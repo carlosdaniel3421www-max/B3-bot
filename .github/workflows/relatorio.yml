@@ -1,10 +1,10 @@
 name: Relatorio Diario B3
 
-# Roda automaticamente em dias úteis às 13:15 UTC (10:15 no horário de Brasília)
+# Roda automaticamente em dias úteis às 12:30 UTC (09:30 no horário de Brasília)
 # e também permite rodar manualmente pelo botão "Run workflow" no GitHub.
 on:
   schedule:
-    - cron: "15 13 * * 1-5"
+    - cron: "30 12 * * 1-5"
   workflow_dispatch:
 
 jobs:
