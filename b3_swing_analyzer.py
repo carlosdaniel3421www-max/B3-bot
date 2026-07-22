@@ -34,25 +34,36 @@ import matplotlib.dates as mdates
 # 1. COLETA DE DADOS
 # --------------------------------------------------------------------------
 
-def baixar_dados(ticker: str, periodo: str = "1y", intervalo: str = "1d") -> pd.DataFrame:
-    """Baixa dados históricos via yfinance. Ticker sem sufixo -> adiciona .SA (B3)."""
+def baixar_dados(ticker: str, periodo: str = "1y", intervalo: str = "1d", tentativas: int = 3) -> pd.DataFrame:
+    """
+    Baixa dados históricos via yfinance. Ticker sem sufixo -> adiciona .SA (B3).
+    Tenta novamente em caso de falha intermitente (comum no Yahoo Finance),
+    com uma pequena pausa entre tentativas.
+    """
+    import time
     import yfinance as yf
 
     if not ticker.upper().endswith(".SA"):
         ticker = ticker.upper() + ".SA"
 
-    df = yf.download(ticker, period=periodo, interval=intervalo, auto_adjust=True, progress=False)
+    ultimo_erro = None
+    for tentativa in range(1, tentativas + 1):
+        try:
+            df = yf.download(ticker, period=periodo, interval=intervalo, auto_adjust=True, progress=False)
+            if not df.empty:
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                df = df.rename(columns=str.lower)
+                df.index.name = "date"
+                return df
+            ultimo_erro = "Retorno vazio"
+        except Exception as e:
+            ultimo_erro = str(e)
 
-    if df.empty:
-        raise ValueError(f"Não foi possível baixar dados para {ticker}. Verifique o código do ativo.")
+        if tentativa < tentativas:
+            time.sleep(2 * tentativa)  # espera um pouco mais a cada nova tentativa
 
-    # yfinance às vezes retorna colunas MultiIndex quando baixa 1 ticker só
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-
-    df = df.rename(columns=str.lower)
-    df.index.name = "date"
-    return df
+    raise ValueError(f"Não foi possível baixar dados para {ticker} após {tentativas} tentativas. Último erro: {ultimo_erro}")
 
 
 # --------------------------------------------------------------------------
