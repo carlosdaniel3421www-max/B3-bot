@@ -40,6 +40,40 @@ def enviar_imagem(token: str, chat_id: str, caminho_imagem: str, legenda: str = 
     return resposta.ok
 
 
+def enviar_album(token: str, chat_id: str, caminhos_imagens: list, legenda_primeira: str = "") -> bool:
+    """
+    Envia várias imagens juntas, como álbum (Telegram permite até 10 por vez).
+    Se houver mais de 10, envia em blocos de 10.
+    """
+    url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
+    ok_geral = True
+
+    for inicio in range(0, len(caminhos_imagens), 10):
+        bloco = caminhos_imagens[inicio:inicio + 10]
+        media = []
+        arquivos = {}
+        for i, caminho in enumerate(bloco):
+            chave = f"foto{i}"
+            media.append({
+                "type": "photo",
+                "media": f"attach://{chave}",
+                **({"caption": legenda_primeira, "parse_mode": "HTML"} if (inicio == 0 and i == 0 and legenda_primeira) else {}),
+            })
+            arquivos[chave] = open(caminho, "rb")
+
+        try:
+            import json
+            resposta = requests.post(url, data={"chat_id": chat_id, "media": json.dumps(media)}, files=arquivos)
+            if not resposta.ok:
+                print(f"Erro ao enviar álbum: {resposta.text}")
+                ok_geral = False
+        finally:
+            for f in arquivos.values():
+                f.close()
+
+    return ok_geral
+
+
 def descobrir_chat_id(token: str):
     """Ajuda a descobrir o chat_id: mande uma mensagem pro bot antes de rodar isso."""
     url = f"https://api.telegram.org/bot{token}/getUpdates"
