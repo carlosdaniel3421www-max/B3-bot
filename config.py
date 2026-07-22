@@ -25,6 +25,13 @@ WATCHLIST = [
 NIVEL_DETALHE = 6          # nível mínimo (0-10) para receber plano de entrada completo
 PERIODO_HISTORICO = "6mo"  # período de dados baixado para os cálculos
 
+# --- Gestão de risco (calculadora de tamanho de posição) ---
+CAPITAL_DISPONIVEL = 10000.0     # capital total que você usa pra operar (ajuste pro seu valor real)
+RISCO_POR_OPERACAO_PCT = 1.0     # % do capital que você aceita perder POR operação (1-2% é o padrão de mercado)
+
+# --- Calendário de resultados ---
+DIAS_MINIMOS_ANTES_RESULTADO = 5  # não sugere entrada se faltar menos que isso pro próximo resultado trimestral
+
 # --- Nomes de empresas para busca de notícias (Google News busca melhor por nome) ---
 NOME_EMPRESA = {
     "PETR4": "Petrobras", "VALE3": "Vale", "ITUB4": "Itaú Unibanco",
