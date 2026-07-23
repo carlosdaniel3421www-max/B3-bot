@@ -3,8 +3,13 @@ Relatório Diário — orquestra tudo:
   1. Roda o screener em toda a watchlist, avaliando cada ativo de 0 a 10
   2. Manda TODOS os gráficos juntos, num álbum só
   3. Manda um resumo em texto, ranqueado do nível mais alto pro mais baixo
-  4. Para os ativos com nível alto (>= NIVEL_DETALHE), checa notícias de
-     risco, calcula stop/alvo e sugere strike/vencimento de opção
+  4. Para os ativos com nível alto (>= NIVEL_DETALHE) que sejam alerta NOVO
+     (não repete o mesmo plano todo dia — veja estado.py):
+       - Checa notícias de risco
+       - Checa calendário de resultados (evita véspera de balanço)
+       - Calcula stop/alvo (ATR + suporte/resistência)
+       - Calcula tamanho de posição sugerido (gestão de risco)
+       - Sugere parâmetros de opção (strike/vencimento)
 
 USO:
     python relatorio_diario.py
@@ -20,18 +25,23 @@ import config
 from screener import rodar_screener
 from noticias import checar_risco_noticias
 from opcoes import sugerir_parametros_opcao
+from calendario import checar_resultado_proximo
+from gestao_risco import calcular_tamanho_posicao
+from estado import carregar_estado, salvar_estado, eh_alerta_novo, atualizar_estado
 from b3_swing_analyzer import sugerir_stop_alvo, plotar_grafico
 from telegram_utils import enviar_mensagem, enviar_album
 
 PASTA_GRAFICOS = "graficos_tmp"
 
 
-def montar_bloco_resumo(resultado: dict) -> str:
+def montar_bloco_resumo(resultado: dict, estado: dict) -> str:
     """
     Monta o bloco de texto para UM ativo no resumo final.
-    Ativos com nível >= NIVEL_DETALHE ganham plano de entrada completo
-    (stop, alvo, opção sugerida). Os demais ficam só com o nível e os motivos,
-    pra você ver o panorama geral sem poluir a leitura.
+    - Nível < NIVEL_DETALHE: só mostra placar e motivos.
+    - Nível >= NIVEL_DETALHE e já alertado antes (mesma direção): versão curta,
+      sem repetir o plano completo.
+    - Nível >= NIVEL_DETALHE e é alerta NOVO: plano completo (notícia,
+      calendário de resultado, stop/alvo, tamanho de posição, opção).
     """
     ticker = resultado["ticker"]
     score = resultado["score"]
@@ -43,10 +53,13 @@ def montar_bloco_resumo(resultado: dict) -> str:
     motivos_txt = "\n".join(f"  • {m}" for m in resultado["motivos"])
 
     if score < config.NIVEL_DETALHE:
-        # Nível baixo: só mostra o panorama, sem plano de entrada
         return f"{cabecalho}\n{motivos_txt}"
 
-    # Nível alto: checa notícias antes de dar o plano completo
+    if not eh_alerta_novo(estado, ticker, score, direcao, config.NIVEL_DETALHE):
+        data_alerta = estado.get(ticker, {}).get("data_primeiro_alerta", "?")
+        return f"{cabecalho}\n{motivos_txt}\n  ↻ Sinal mantido desde {data_alerta} — plano já enviado, sem novidade."
+
+    # --- A partir daqui: é um alerta NOVO, monta o plano completo ---
     nome_empresa = config.NOME_EMPRESA.get(ticker, ticker)
     risco_noticias = checar_risco_noticias(nome_empresa)
 
@@ -57,9 +70,20 @@ def montar_bloco_resumo(resultado: dict) -> str:
             f"  🚫 <b>Plano de entrada CANCELADO</b> — notícia de risco encontrada: {motivo_bloqueio}"
         )
 
+    resultado_trimestral = checar_resultado_proximo(ticker, config.DIAS_MINIMOS_ANTES_RESULTADO)
+    if resultado_trimestral["tem_resultado_proximo"]:
+        return (
+            f"{cabecalho}\n{motivos_txt}\n"
+            f"  🚫 <b>Plano de entrada CANCELADO</b> — resultado trimestral em "
+            f"{resultado_trimestral['dias_ate_resultado']} dia(s) ({resultado_trimestral['data_resultado']}). "
+            f"Volatilidade imprevisível na véspera/pós-balanço."
+        )
+
     df = resultado["df"]
     stop_alvo = sugerir_stop_alvo(df, direcao)
     opcao = sugerir_parametros_opcao(resultado["preco"], direcao)
+    posicao = calcular_tamanho_posicao(config.CAPITAL_DISPONIVEL, config.RISCO_POR_OPERACAO_PCT,
+                                        stop_alvo["preco_entrada"], stop_alvo["stop"])
 
     explicacao_opcao = (
         "uma CALL é a opção que lucra se o ativo SOBE"
@@ -73,6 +97,18 @@ def montar_bloco_resumo(resultado: dict) -> str:
         f"  <b>Plano sugerido:</b> entrar perto de R$ {stop_alvo['preco_entrada']} · "
         f"sair no prejuízo (stop) se cair a R$ {stop_alvo['stop']} · "
         f"realizar lucro (alvo) perto de R$ {stop_alvo['alvo']}\n"
+    )
+
+    if posicao.get("quantidade_acoes", 0) > 0:
+        plano += (
+            f"  <b>Tamanho sugerido:</b> {posicao['quantidade_acoes']} ações "
+            f"(≈ R$ {posicao['valor_posicao']}), arriscando R$ {posicao['valor_em_risco']} "
+            f"({posicao['pct_capital_em_risco']}% do capital)\n"
+        )
+    else:
+        plano += "  <b>Tamanho sugerido:</b> risco por ação muito alto pro seu capital/risco configurado — reveja o setup.\n"
+
+    plano += (
         f"  <b>Opção sugerida:</b> {opcao['tipo_opcao']}, strike próximo de "
         f"R$ {opcao['strike_sugerido_aprox']}, vencimento {opcao['vencimento_sugerido']} "
         f"— {explicacao_opcao}.\n"
@@ -106,14 +142,22 @@ def gerar_e_enviar_relatorio():
         plotar_grafico(r["df"], r["ticker"], caminho)
         caminhos_graficos.append(caminho)
 
-    print("Checando notícias e montando resumo...")
-    blocos = [montar_bloco_resumo(r) for r in resultados]
+    print("Carregando estado (histórico de alertas)...")
+    estado = carregar_estado()
+
+    print("Checando notícias/calendário e montando resumo...")
+    blocos = []
+    for r in resultados:
+        blocos.append(montar_bloco_resumo(r, estado))
+        estado = atualizar_estado(estado, r["ticker"], r["score"], r["direcao"], config.NIVEL_DETALHE)
+
+    salvar_estado(estado)
 
     mensagem_final = (
         f"📊 <b>Relatório B3 — {hoje}</b>\n"
         f"Ranking de {len(resultados)} ativo(s), do nível mais alto pro mais baixo.\n"
-        f"Plano de entrada completo só a partir de {config.NIVEL_DETALHE}/10 "
-        f"(confluência mais forte de indicadores).\n\n"
+        f"Plano de entrada completo só a partir de {config.NIVEL_DETALHE}/10, e só na primeira "
+        f"vez que o sinal aparece (sem repetir todo dia).\n\n"
         + "\n\n".join(blocos)
         + "\n\n⚠️ Apoio técnico automatizado, não é recomendação de investimento. "
           "Confirme liquidez da opção e valide com sua própria gestão de risco."
@@ -123,7 +167,6 @@ def gerar_e_enviar_relatorio():
     enviar_album(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, caminhos_graficos)
 
     print("Enviando resumo em texto...")
-    # Telegram limita ~4096 caracteres por mensagem; quebra em partes se precisar
     LIMITE = 3800
     if len(mensagem_final) <= LIMITE:
         enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, mensagem_final)
