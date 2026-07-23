@@ -1,0 +1,41 @@
+name: Relatorio Tarde B3 (Prazo Curto)
+
+# Roda automaticamente em dias úteis às 16:00 UTC (13:00 no horário de Brasília)
+# e também permite rodar manualmente pelo botão "Run workflow" no GitHub.
+on:
+  schedule:
+    - cron: "0 16 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # necessário pra salvar o estado_tarde.json de volta no repositório
+
+jobs:
+  rodar-relatorio-tarde:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o código do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependências
+        run: pip install yfinance pandas numpy matplotlib feedparser requests
+
+      - name: Rodar relatório da tarde
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          OPLAB_TOKEN: ${{ secrets.OPLAB_TOKEN }}
+        run: python relatorio_tarde.py
+
+      - name: Salvar histórico de alertas (estado_tarde.json)
+        run: |
+          git config user.name "robo-b3-bot"
+          git config user.email "actions@github.com"
+          git add estado_tarde.json
+          git diff --staged --quiet || git commit -m "Atualiza estado_tarde.json [skip ci]"
+          git push
