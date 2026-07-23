@@ -61,7 +61,7 @@ def baixar_dados(ticker: str, periodo: str = "1y", intervalo: str = "1d", tentat
             ultimo_erro = str(e)
 
         if tentativa < tentativas:
-            time.sleep(2 * tentativa)  # espera um pouco mais a cada nova tentativa
+            time.sleep(2 * tentativa)
 
     raise ValueError(f"Não foi possível baixar dados para {ticker} após {tentativas} tentativas. Último erro: {ultimo_erro}")
 
@@ -142,14 +142,14 @@ def calcular_indicadores(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def sugerir_stop_alvo(df: pd.DataFrame, direcao: str, atr_mult: float = 1.5, risco_retorno: float = 2.0) -> dict:
+def sugerir_stop_alvo(df: pd.DataFrame, direcao: str, atr_mult: float = 1.5, risco_retorno: float = 2.0,
+                       risco_maximo_atr_mult: float = 3.0) -> dict:
     """
     Sugere stop-loss e alvo (take-profit) com base em ATR e suporte/resistência.
     direcao: "compra" ou "venda"
     atr_mult: quantos ATRs de folga o stop deixa além do suporte/resistência
-              (menor = stop mais apertado, adequado pra prazo mais curto)
-    risco_retorno: múltiplo do risco usado pra definir o alvo (2.0 = alvo a 2x
-                   a distância do stop; menor = alvo mais perto, atingido mais rápido)
+    risco_retorno: múltiplo do risco usado pra definir o alvo
+    risco_maximo_atr_mult: TETO de risco por ação, em múltiplos de ATR.
     """
     ultimo = df.iloc[-1]
     preco = ultimo["close"]
@@ -157,10 +157,14 @@ def sugerir_stop_alvo(df: pd.DataFrame, direcao: str, atr_mult: float = 1.5, ris
 
     if direcao == "compra":
         stop = min(ultimo["suporte"], preco - atr_mult * atr)
+        piso_stop = preco - risco_maximo_atr_mult * atr
+        stop = max(stop, piso_stop)
         risco = preco - stop
         alvo = preco + risco_retorno * risco
     else:  # venda
         stop = max(ultimo["resistencia"], preco + atr_mult * atr)
+        teto_stop = preco + risco_maximo_atr_mult * atr
+        stop = min(stop, teto_stop)
         risco = stop - preco
         alvo = preco - risco_retorno * risco
 
@@ -173,6 +177,173 @@ def sugerir_stop_alvo(df: pd.DataFrame, direcao: str, atr_mult: float = 1.5, ris
     }
 
 
+def projetar_volume_dia_atual(df: pd.DataFrame, hora_abertura: float = 10.0, hora_fechamento: float = 17.0) -> pd.DataFrame:
+    """
+    Se a última barra do df for do dia de HOJE e o pregão ainda estiver em
+    andamento, projeta o volume dessa barra pro dia inteiro, pra não
+    subestimar comparações de volume por causa de um candle parcial.
+    """
+    from datetime import datetime, timedelta
+
+    if df.empty:
+        return df
+
+    agora_brt = datetime.utcnow() - timedelta(hours=3)
+    ultima_data = df.index[-1].date()
+
+    if ultima_data != agora_brt.date():
+        return df
+
+    hora_atual = agora_brt.hour + agora_brt.minute / 60
+    if hora_atual <= hora_abertura or hora_atual >= hora_fechamento:
+        return df
+
+    fracao_decorrida = max((hora_atual - hora_abertura) / (hora_fechamento - hora_abertura), 0.05)
+
+    df = df.copy()
+    df.iloc[-1, df.columns.get_loc("volume")] = df["volume"].iloc[-1] / fracao_decorrida
+    return df
+
+
+def calcular_indicadores_curto_prazo(df: pd.DataFrame) -> pd.DataFrame:
+    """Versão dos indicadores com períodos mais curtos, pra decisões de poucos dias."""
+    df["sma5_curto"] = df["close"].rolling(5).mean()
+    df["sma10_curto"] = df["close"].rolling(10).mean()
+    df["sma20_curto"] = df["close"].rolling(20).mean()
+
+    delta = df["close"].diff()
+    ganho = delta.clip(lower=0)
+    perda = -delta.clip(upper=0)
+    media_ganho = ganho.ewm(alpha=1 / 7, min_periods=7, adjust=False).mean()
+    media_perda = perda.ewm(alpha=1 / 7, min_periods=7, adjust=False).mean()
+    rs = media_ganho / media_perda
+    df["rsi_curto"] = 100 - (100 / (1 + rs))
+
+    ema_rapida = df["close"].ewm(span=5, adjust=False).mean()
+    ema_lenta = df["close"].ewm(span=13, adjust=False).mean()
+    df["macd_curto"] = ema_rapida - ema_lenta
+    df["macd_sinal_curto"] = df["macd_curto"].ewm(span=5, adjust=False).mean()
+    df["macd_hist_curto"] = df["macd_curto"] - df["macd_sinal_curto"]
+
+    minima = df["low"].rolling(7).min()
+    maxima = df["high"].rolling(7).max()
+    df["stoch_k_curto"] = 100 * (df["close"] - minima) / (maxima - minima)
+
+    alta_baixa = df["high"] - df["low"]
+    alta_fechamento = (df["high"] - df["close"].shift()).abs()
+    baixa_fechamento = (df["low"] - df["close"].shift()).abs()
+    tr = pd.concat([alta_baixa, alta_fechamento, baixa_fechamento], axis=1).max(axis=1)
+    df["atr_curto"] = tr.rolling(7).mean()
+
+    df["resistencia_curta"] = df["high"].rolling(10).max()
+    df["suporte_curto"] = df["low"].rolling(10).min()
+
+    return df
+
+
+def avaliar_ativo_curto_prazo(df: pd.DataFrame) -> dict:
+    """Igual a avaliar_ativo, mas usando os indicadores de período curto."""
+    ultimo = df.iloc[-1]
+    penultimo = df.iloc[-2] if len(df) > 1 else ultimo
+
+    pontos_compra, pontos_venda = 0, 0
+    motivos_compra, motivos_venda = [], []
+
+    if ultimo["close"] > ultimo["sma5_curto"] > ultimo["sma10_curto"] > ultimo["sma20_curto"]:
+        pontos_compra += 2
+        motivos_compra.append("Tendência de curtíssimo prazo de alta (preço > SMA5 > SMA10 > SMA20)")
+    elif ultimo["close"] > ultimo["sma5_curto"] > ultimo["sma10_curto"]:
+        pontos_compra += 1
+        motivos_compra.append("Tendência de curtíssimo prazo de alta (preço > SMA5 > SMA10)")
+    elif ultimo["close"] < ultimo["sma5_curto"] < ultimo["sma10_curto"] < ultimo["sma20_curto"]:
+        pontos_venda += 2
+        motivos_venda.append("Tendência de curtíssimo prazo de baixa (preço < SMA5 < SMA10 < SMA20)")
+    elif ultimo["close"] < ultimo["sma5_curto"] < ultimo["sma10_curto"]:
+        pontos_venda += 1
+        motivos_venda.append("Tendência de curtíssimo prazo de baixa (preço < SMA5 < SMA10)")
+
+    if ultimo["rsi_curto"] < 30:
+        pontos_compra += 2
+        motivos_compra.append(f"RSI(7) em {ultimo['rsi_curto']:.0f} — sobrevenda forte de curto prazo")
+    elif ultimo["rsi_curto"] < 40:
+        pontos_compra += 1
+        motivos_compra.append(f"RSI(7) em {ultimo['rsi_curto']:.0f} — zona de sobrevenda")
+    elif ultimo["rsi_curto"] > 70:
+        pontos_venda += 2
+        motivos_venda.append(f"RSI(7) em {ultimo['rsi_curto']:.0f} — sobrecompra forte de curto prazo")
+    elif ultimo["rsi_curto"] > 60:
+        pontos_venda += 1
+        motivos_venda.append(f"RSI(7) em {ultimo['rsi_curto']:.0f} — zona de sobrecompra")
+
+    atr_curto = ultimo["atr_curto"] if pd.notna(ultimo["atr_curto"]) else 0
+    diff_macd = ultimo["macd_curto"] - ultimo["macd_sinal_curto"]
+    zona_morta_macd = 0.05 * atr_curto if atr_curto > 0 else 0
+    hist_cresceu = ultimo["macd_hist_curto"] > penultimo["macd_hist_curto"]
+
+    if abs(diff_macd) < zona_morta_macd:
+        pass
+    elif diff_macd > 0:
+        pts = 2 if hist_cresceu else 1
+        pontos_compra += pts
+        extra = " e ganhando força" if hist_cresceu else ""
+        motivos_compra.append(f"MACD rápido (5/13/5) acima do sinal (momentum comprador{extra})")
+    else:
+        pts = 2 if not hist_cresceu else 1
+        pontos_venda += pts
+        extra = " e perdendo força" if not hist_cresceu else ""
+        motivos_venda.append(f"MACD rápido (5/13/5) abaixo do sinal (momentum vendedor{extra})")
+
+    if ultimo["stoch_k_curto"] < 20:
+        pontos_compra += 2
+        motivos_compra.append(f"Estocástico(7) em {ultimo['stoch_k_curto']:.0f} — sobrevenda extrema")
+    elif ultimo["stoch_k_curto"] < 35:
+        pontos_compra += 1
+        motivos_compra.append(f"Estocástico(7) em {ultimo['stoch_k_curto']:.0f} — sobrevenda")
+    elif ultimo["stoch_k_curto"] > 80:
+        pontos_venda += 2
+        motivos_venda.append(f"Estocástico(7) em {ultimo['stoch_k_curto']:.0f} — sobrecompra extrema")
+    elif ultimo["stoch_k_curto"] > 65:
+        pontos_venda += 1
+        motivos_venda.append(f"Estocástico(7) em {ultimo['stoch_k_curto']:.0f} — sobrecompra")
+
+    faixa = ultimo["resistencia_curta"] - ultimo["suporte_curto"]
+    if faixa > 0:
+        dist_suporte = (ultimo["close"] - ultimo["suporte_curto"]) / faixa
+        media_volume = df["volume"].rolling(10).mean().iloc[-1]
+        volume_alto = ultimo["volume"] > media_volume
+        if dist_suporte < 0.15:
+            pts = 2 if volume_alto else 1
+            pontos_compra += pts
+            extra = " com volume acima da média (mais força na reação)" if volume_alto else ""
+            motivos_compra.append(f"Preço encostando no suporte de 10 dias{extra}")
+        elif dist_suporte > 0.85:
+            pts = 2 if volume_alto else 1
+            pontos_venda += pts
+            extra = " com volume acima da média (mais força na reação)" if volume_alto else ""
+            motivos_venda.append(f"Preço encostando na resistência de 10 dias{extra}")
+
+    if pontos_compra == pontos_venda:
+        direcao = "neutro"
+        score = pontos_compra
+        motivos = (motivos_compra + motivos_venda) or ["Nenhum indicador de curto prazo com sinal relevante"]
+    elif pontos_compra > pontos_venda:
+        direcao = "compra"
+        score = pontos_compra
+        motivos = motivos_compra
+    else:
+        direcao = "venda"
+        score = pontos_venda
+        motivos = motivos_venda
+
+    return {
+        "direcao": direcao,
+        "score": score,
+        "motivos": motivos,
+        "preco_atual": ultimo["close"],
+        "data": df.index[-1],
+    }
+
+
 # --------------------------------------------------------------------------
 # 3. PLACAR DE CONFLUÊNCIA (heurística simples, não é garantia de nada)
 # --------------------------------------------------------------------------
@@ -180,8 +351,7 @@ def sugerir_stop_alvo(df: pd.DataFrame, direcao: str, atr_mult: float = 1.5, ris
 def avaliar_ativo(df: pd.DataFrame) -> dict:
     """
     Avalia o ativo com placar de 0 a 10 para COMPRA e para VENDA,
-    e retorna a direção de maior placar. Cada uma das 5 categorias de
-    indicador vale até 2 pontos, dependendo da força do sinal.
+    e retorna a direção de maior placar.
     """
     ultimo = df.iloc[-1]
     penultimo = df.iloc[-2] if len(df) > 1 else ultimo
@@ -189,7 +359,6 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
     pontos_compra, pontos_venda = 0, 0
     motivos_compra, motivos_venda = [], []
 
-    # --- Tendência (médias móveis) — até 2 pontos ---
     if ultimo["close"] > ultimo["sma21"] > ultimo["sma50"] > ultimo["sma200"]:
         pontos_compra += 2
         motivos_compra.append("Tendência de alta confirmada nas médias de curto, médio e longo prazo")
@@ -203,23 +372,27 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
         pontos_venda += 1
         motivos_venda.append("Tendência de baixa no curto/médio prazo")
 
-    # --- RSI — até 2 pontos ---
-    if ultimo["rsi"] < 20:
+    if ultimo["rsi"] < 30:
         pontos_compra += 2
         motivos_compra.append(f"RSI em {ultimo['rsi']:.0f} — sobrevenda forte (ativo muito descontado no curto prazo)")
-    elif ultimo["rsi"] < 30:
+    elif ultimo["rsi"] < 40:
         pontos_compra += 1
         motivos_compra.append(f"RSI em {ultimo['rsi']:.0f} — zona de sobrevenda")
-    elif ultimo["rsi"] > 80:
+    elif ultimo["rsi"] > 70:
         pontos_venda += 2
         motivos_venda.append(f"RSI em {ultimo['rsi']:.0f} — sobrecompra forte (ativo muito esticado no curto prazo)")
-    elif ultimo["rsi"] > 70:
+    elif ultimo["rsi"] > 60:
         pontos_venda += 1
         motivos_venda.append(f"RSI em {ultimo['rsi']:.0f} — zona de sobrecompra")
 
-    # --- MACD — até 2 pontos ---
+    atr_atual = ultimo["atr"] if pd.notna(ultimo["atr"]) else 0
+    diff_macd = ultimo["macd"] - ultimo["macd_sinal"]
+    zona_morta_macd = 0.05 * atr_atual if atr_atual > 0 else 0
     hist_cresceu = ultimo["macd_hist"] > penultimo["macd_hist"]
-    if ultimo["macd"] > ultimo["macd_sinal"]:
+
+    if abs(diff_macd) < zona_morta_macd:
+        pass
+    elif diff_macd > 0:
         pts = 2 if hist_cresceu else 1
         pontos_compra += pts
         extra = " e ganhando força" if hist_cresceu else ""
@@ -230,45 +403,47 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
         extra = " e perdendo força" if not hist_cresceu else ""
         motivos_venda.append(f"MACD abaixo da linha de sinal (momentum vendedor{extra})")
 
-    # --- Estocástico — até 2 pontos ---
-    if ultimo["stoch_k"] < 10:
+    if ultimo["stoch_k"] < 20:
         pontos_compra += 2
         motivos_compra.append(f"Estocástico em {ultimo['stoch_k']:.0f} — sobrevenda extrema")
-    elif ultimo["stoch_k"] < 20:
+    elif ultimo["stoch_k"] < 35:
         pontos_compra += 1
         motivos_compra.append(f"Estocástico em {ultimo['stoch_k']:.0f} — sobrevenda")
-    elif ultimo["stoch_k"] > 90:
+    elif ultimo["stoch_k"] > 80:
         pontos_venda += 2
         motivos_venda.append(f"Estocástico em {ultimo['stoch_k']:.0f} — sobrecompra extrema")
-    elif ultimo["stoch_k"] > 80:
+    elif ultimo["stoch_k"] > 65:
         pontos_venda += 1
         motivos_venda.append(f"Estocástico em {ultimo['stoch_k']:.0f} — sobrecompra")
 
-    # --- Suporte/Resistência + volume — até 2 pontos ---
     faixa = ultimo["resistencia"] - ultimo["suporte"]
     if faixa > 0:
         dist_suporte = (ultimo["close"] - ultimo["suporte"]) / faixa
         media_volume = df["volume"].rolling(20).mean().iloc[-1]
         volume_alto = ultimo["volume"] > media_volume
-        if dist_suporte < 0.05:
+        if dist_suporte < 0.15:
             pts = 2 if volume_alto else 1
             pontos_compra += pts
             extra = " com volume acima da média (mais força na reação)" if volume_alto else ""
             motivos_compra.append(f"Preço encostando no suporte recente{extra}")
-        elif dist_suporte > 0.95:
+        elif dist_suporte > 0.85:
             pts = 2 if volume_alto else 1
             pontos_venda += pts
             extra = " com volume acima da média (mais força na reação)" if volume_alto else ""
             motivos_venda.append(f"Preço encostando na resistência recente{extra}")
 
-    if pontos_compra >= pontos_venda:
+    if pontos_compra == pontos_venda:
+        direcao = "neutro"
+        score = pontos_compra
+        motivos = (motivos_compra + motivos_venda) or ["Nenhum indicador com sinal relevante no momento"]
+    elif pontos_compra > pontos_venda:
         direcao = "compra"
         score = pontos_compra
-        motivos = motivos_compra or ["Nenhum indicador com sinal relevante no momento"]
+        motivos = motivos_compra
     else:
         direcao = "venda"
         score = pontos_venda
-        motivos = motivos_venda or ["Nenhum indicador com sinal relevante no momento"]
+        motivos = motivos_venda
 
     return {
         "direcao": direcao,
@@ -290,7 +465,6 @@ def plotar_grafico(df: pd.DataFrame, ticker: str, caminho_saida: str):
     )
     ax_preco, ax_vol, ax_rsi_stoch, ax_macd = eixos
 
-    # --- Preço + médias + suporte/resistência ---
     ax_preco.plot(df.index, df["close"], label="Fechamento", color="black", linewidth=1.2)
     ax_preco.plot(df.index, df["sma9"], label="SMA9", color="#1f77b4", linewidth=0.9)
     ax_preco.plot(df.index, df["sma21"], label="SMA21", color="#ff7f0e", linewidth=0.9)
@@ -303,13 +477,11 @@ def plotar_grafico(df: pd.DataFrame, ticker: str, caminho_saida: str):
     ax_preco.legend(loc="upper left", fontsize=8, ncol=4)
     ax_preco.grid(alpha=0.3)
 
-    # --- Volume ---
     cores_vol = np.where(df["close"] >= df["close"].shift(1), "green", "red")
     ax_vol.bar(df.index, df["volume"], color=cores_vol, alpha=0.6, width=1)
     ax_vol.set_ylabel("Volume")
     ax_vol.grid(alpha=0.3)
 
-    # --- RSI + Estocástico ---
     ax_rsi_stoch.plot(df.index, df["rsi"], label="RSI(14)", color="blue", linewidth=0.9)
     ax_rsi_stoch.plot(df.index, df["stoch_k"], label="%K Estocástico", color="orange", linewidth=0.7)
     ax_rsi_stoch.axhline(70, color="red", linestyle="--", linewidth=0.6)
@@ -318,7 +490,6 @@ def plotar_grafico(df: pd.DataFrame, ticker: str, caminho_saida: str):
     ax_rsi_stoch.legend(loc="upper left", fontsize=8)
     ax_rsi_stoch.grid(alpha=0.3)
 
-    # --- MACD ---
     ax_macd.plot(df.index, df["macd"], label="MACD", color="blue", linewidth=0.9)
     ax_macd.plot(df.index, df["macd_sinal"], label="Sinal", color="orange", linewidth=0.9)
     cores_hist = np.where(df["macd_hist"] >= 0, "green", "red")
