@@ -142,31 +142,34 @@ def calcular_indicadores(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def sugerir_stop_alvo(df: pd.DataFrame, direcao: str) -> dict:
+def sugerir_stop_alvo(df: pd.DataFrame, direcao: str, atr_mult: float = 1.5, risco_retorno: float = 2.0) -> dict:
     """
     Sugere stop-loss e alvo (take-profit) com base em ATR e suporte/resistência.
     direcao: "compra" ou "venda"
-    Regra: stop = 1.5x ATR além do suporte/resistência; alvo = risco:retorno de 2:1.
+    atr_mult: quantos ATRs de folga o stop deixa além do suporte/resistência
+              (menor = stop mais apertado, adequado pra prazo mais curto)
+    risco_retorno: múltiplo do risco usado pra definir o alvo (2.0 = alvo a 2x
+                   a distância do stop; menor = alvo mais perto, atingido mais rápido)
     """
     ultimo = df.iloc[-1]
     preco = ultimo["close"]
     atr = ultimo["atr"]
 
     if direcao == "compra":
-        stop = min(ultimo["suporte"], preco - 1.5 * atr)
+        stop = min(ultimo["suporte"], preco - atr_mult * atr)
         risco = preco - stop
-        alvo = preco + 2 * risco
+        alvo = preco + risco_retorno * risco
     else:  # venda
-        stop = max(ultimo["resistencia"], preco + 1.5 * atr)
+        stop = max(ultimo["resistencia"], preco + atr_mult * atr)
         risco = stop - preco
-        alvo = preco - 2 * risco
+        alvo = preco - risco_retorno * risco
 
     return {
         "preco_entrada": round(preco, 2),
         "stop": round(stop, 2),
         "alvo": round(alvo, 2),
         "risco_por_acao": round(abs(risco), 2),
-        "relacao_risco_retorno": "1:2",
+        "relacao_risco_retorno": f"1:{risco_retorno:g}",
     }
 
 
