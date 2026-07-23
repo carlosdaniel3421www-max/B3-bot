@@ -1,9 +1,9 @@
 """
 Relatório Diário — orquestra tudo:
-  1. Roda o screener em toda a watchlist, avaliando cada ativo de 0 a 10
+  1. Roda o screener na watchlist, avaliando cada ativo de 0 a 10
   2. Manda TODOS os gráficos juntos, num álbum só
   3. Manda um resumo em texto, ranqueado do nível mais alto pro mais baixo
-  4. Para os ativos com nível alto (>= NIVEL_DETALHE) que sejam alerta NOVO
+  4. Para os ativos com nível alto (>= nivel_detalhe) que sejam alerta NOVO
      (não repete o mesmo plano todo dia — veja estado.py):
        - Checa notícias de risco
        - Checa calendário de resultados (evita véspera de balanço)
@@ -11,7 +11,11 @@ Relatório Diário — orquestra tudo:
        - Calcula tamanho de posição sugerido (gestão de risco)
        - Sugere parâmetros de opção (strike/vencimento)
 
-USO:
+A lógica principal (gerar_e_enviar_relatorio) é parametrizável, pra poder
+ser reaproveitada por outros relatórios (ex: relatorio_tarde.py, com
+watchlist e prazo diferentes) sem duplicar código.
+
+USO (relatório da manhã, padrão):
     python relatorio_diario.py
 
 Agende isso pra rodar todo dia de manhã usando GitHub Actions (veja o
@@ -34,14 +38,13 @@ from telegram_utils import enviar_mensagem, enviar_album
 PASTA_GRAFICOS = "graficos_tmp"
 
 
-def montar_bloco_resumo(resultado: dict, estado: dict) -> str:
+def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
+                         atr_mult: float = 1.5, risco_retorno: float = 2.0) -> str:
     """
     Monta o bloco de texto para UM ativo no resumo final.
-    - Nível < NIVEL_DETALHE: só mostra placar e motivos.
-    - Nível >= NIVEL_DETALHE e já alertado antes (mesma direção): versão curta,
-      sem repetir o plano completo.
-    - Nível >= NIVEL_DETALHE e é alerta NOVO: plano completo (notícia,
-      calendário de resultado, stop/alvo, tamanho de posição, opção).
+    - Nível < nivel_detalhe: só mostra placar e motivos.
+    - Nível >= nivel_detalhe e já alertado antes (mesma direção): versão curta.
+    - Nível >= nivel_detalhe e é alerta NOVO: plano completo.
     """
     ticker = resultado["ticker"]
     score = resultado["score"]
@@ -52,10 +55,10 @@ def montar_bloco_resumo(resultado: dict, estado: dict) -> str:
     cabecalho = f"{emoji} <b>{ticker} — {score}/10 ({palavra})</b>"
     motivos_txt = "\n".join(f"  • {m}" for m in resultado["motivos"])
 
-    if score < config.NIVEL_DETALHE:
+    if score < nivel_detalhe:
         return f"{cabecalho}\n{motivos_txt}"
 
-    if not eh_alerta_novo(estado, ticker, score, direcao, config.NIVEL_DETALHE):
+    if not eh_alerta_novo(estado, ticker, score, direcao, nivel_detalhe):
         data_alerta = estado.get(ticker, {}).get("data_primeiro_alerta", "?")
         return f"{cabecalho}\n{motivos_txt}\n  ↻ Sinal mantido desde {data_alerta} — plano já enviado, sem novidade."
 
@@ -80,7 +83,7 @@ def montar_bloco_resumo(resultado: dict, estado: dict) -> str:
         )
 
     df = resultado["df"]
-    stop_alvo = sugerir_stop_alvo(df, direcao)
+    stop_alvo = sugerir_stop_alvo(df, direcao, atr_mult=atr_mult, risco_retorno=risco_retorno)
     opcao = sugerir_parametros_opcao(resultado["preco"], direcao)
     posicao = calcular_tamanho_posicao(config.CAPITAL_DISPONIVEL, config.RISCO_POR_OPERACAO_PCT,
                                         stop_alvo["preco_entrada"], stop_alvo["stop"])
@@ -121,15 +124,22 @@ def montar_bloco_resumo(resultado: dict, estado: dict) -> str:
     return plano
 
 
-def gerar_e_enviar_relatorio():
-    print("Rodando screener em toda a watchlist...")
-    resultados = rodar_screener(watchlist=config.WATCHLIST, periodo=config.PERIODO_HISTORICO)
+def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
+                              arquivo_estado="estado.json", atr_mult: float = 1.5,
+                              risco_retorno: float = 2.0, titulo: str = "Relatório B3",
+                              nota_extra: str = ""):
+    watchlist = watchlist or config.WATCHLIST
+    periodo = periodo or config.PERIODO_HISTORICO
+    nivel_detalhe = nivel_detalhe if nivel_detalhe is not None else config.NIVEL_DETALHE
+
+    print(f"[{titulo}] Rodando screener...")
+    resultados = rodar_screener(watchlist=watchlist, periodo=periodo)
     hoje = date.today().strftime("%d/%m/%Y")
 
     if not resultados:
         enviar_mensagem(
             config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID,
-            f"📊 <b>Relatório {hoje}</b>\nNão consegui baixar dados de nenhum ativo hoje. Verifique a watchlist."
+            f"📊 <b>{titulo} — {hoje}</b>\nNão consegui baixar dados de nenhum ativo hoje."
         )
         print("Nenhum resultado. Mensagem enviada.")
         return
@@ -138,26 +148,32 @@ def gerar_e_enviar_relatorio():
     os.makedirs(PASTA_GRAFICOS, exist_ok=True)
     caminhos_graficos = []
     for r in resultados:
-        caminho = os.path.join(PASTA_GRAFICOS, f"{r['ticker']}.png")
+        caminho = os.path.join(PASTA_GRAFICOS, f"{r['ticker']}_{arquivo_estado.replace('.json','')}.png")
         plotar_grafico(r["df"], r["ticker"], caminho)
         caminhos_graficos.append(caminho)
 
     print("Carregando estado (histórico de alertas)...")
-    estado = carregar_estado()
+    estado = carregar_estado(arquivo_estado)
 
     print("Checando notícias/calendário e montando resumo...")
     blocos = []
     for r in resultados:
-        blocos.append(montar_bloco_resumo(r, estado))
-        estado = atualizar_estado(estado, r["ticker"], r["score"], r["direcao"], config.NIVEL_DETALHE)
+        blocos.append(montar_bloco_resumo(r, estado, nivel_detalhe, atr_mult=atr_mult, risco_retorno=risco_retorno))
+        estado = atualizar_estado(estado, r["ticker"], r["score"], r["direcao"], nivel_detalhe)
 
-    salvar_estado(estado)
+    salvar_estado(estado, arquivo_estado)
+
+    cabecalho_msg = f"📊 <b>{titulo} — {hoje}</b>\n"
+    if nota_extra:
+        cabecalho_msg += f"{nota_extra}\n"
+    cabecalho_msg += (
+        f"Ranking de {len(resultados)} ativo(s), do nível mais alto pro mais baixo.\n"
+        f"Plano de entrada completo só a partir de {nivel_detalhe}/10, e só na primeira "
+        f"vez que o sinal aparece (sem repetir todo dia).\n\n"
+    )
 
     mensagem_final = (
-        f"📊 <b>Relatório B3 — {hoje}</b>\n"
-        f"Ranking de {len(resultados)} ativo(s), do nível mais alto pro mais baixo.\n"
-        f"Plano de entrada completo só a partir de {config.NIVEL_DETALHE}/10, e só na primeira "
-        f"vez que o sinal aparece (sem repetir todo dia).\n\n"
+        cabecalho_msg
         + "\n\n".join(blocos)
         + "\n\n⚠️ Apoio técnico automatizado, não é recomendação de investimento. "
           "Confirme liquidez da opção e valide com sua própria gestão de risco."
@@ -184,8 +200,14 @@ def gerar_e_enviar_relatorio():
         for parte in partes:
             enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, parte)
 
-    print("Relatório enviado com sucesso.")
+    print(f"[{titulo}] Relatório enviado com sucesso.")
 
 
 if __name__ == "__main__":
-    gerar_e_enviar_relatorio()
+    gerar_e_enviar_relatorio(
+        watchlist=config.WATCHLIST,
+        periodo=config.PERIODO_HISTORICO,
+        nivel_detalhe=config.NIVEL_DETALHE,
+        arquivo_estado="estado.json",
+        titulo="Relatório B3 — Manhã",
+    )
