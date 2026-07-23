@@ -32,6 +32,13 @@ RISCO_POR_OPERACAO_PCT = 1.0     # % do capital que você aceita perder POR oper
 # --- Calendário de resultados ---
 DIAS_MINIMOS_ANTES_RESULTADO = 5  # não sugere entrada se faltar menos que isso pro próximo resultado trimestral
 
+# --- Relatório da tarde (13h, foco em prazo mais curto — até o fim da semana) ---
+WATCHLIST_TARDE = ["PETR4", "VALE3", "ITUB4", "WEGE3"]
+NIVEL_DETALHE_TARDE = 6       # pode baixar pra 5 se achar que fica sinal demais raro
+ATR_MULT_TARDE = 1.0          # stop mais apertado que o padrão (1.5)
+RISCO_RETORNO_TARDE = 1.5     # alvo mais próximo (mais fácil de atingir em poucos dias)
+MAX_DIAS_HOLDING_TARDE = 5    # referência de prazo (não é usado pro stop/alvo, só informativo no texto)
+
 # --- Nomes de empresas para busca de notícias (Google News busca melhor por nome) ---
 NOME_EMPRESA = {
     "PETR4": "Petrobras", "VALE3": "Vale", "ITUB4": "Itaú Unibanco",
