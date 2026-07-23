@@ -28,6 +28,8 @@ PERIODO_HISTORICO = "6mo"  # período de dados baixado para os cálculos
 # --- Gestão de risco (calculadora de tamanho de posição) ---
 CAPITAL_DISPONIVEL = 10000.0     # capital total que você usa pra operar (ajuste pro seu valor real)
 RISCO_POR_OPERACAO_PCT = 1.0     # % do capital que você aceita perder POR operação (1-2% é o padrão de mercado)
+RISCO_MAXIMO_ATR_MULT = 3.0      # teto de risco por ação, em múltiplos de ATR (evita stop absurdo em forte tendência)
+MARGEM_SAIDA_ESTADO = 2          # zona de amortecimento (em pontos) pra não repetir alerta quando o score oscila perto do gatilho
 
 # --- Calendário de resultados ---
 DIAS_MINIMOS_ANTES_RESULTADO = 5  # não sugere entrada se faltar menos que isso pro próximo resultado trimestral
