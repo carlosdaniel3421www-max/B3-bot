@@ -1,14 +1,14 @@
 name: Relatorio Tarde B3 (Prazo Curto)
 
-# Roda automaticamente em dias úteis às 16:00 UTC (13:00 no horário de Brasília)
-# e também permite rodar manualmente pelo botão "Run workflow" no GitHub.
+# Roda em dias úteis às 16:13 UTC (13:13 no horário de Brasília) -- horário
+# quebrado de propósito, mesmo motivo do relatorio.yml.
 on:
   schedule:
-    - cron: "0 16 * * 1-5"
+    - cron: "13 16 * * 1-5"
   workflow_dispatch:
 
 permissions:
-  contents: write   # necessário pra salvar o estado_tarde.json de volta no repositório
+  contents: write
 
 jobs:
   rodar-relatorio-tarde:
