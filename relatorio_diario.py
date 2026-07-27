@@ -7,13 +7,13 @@ Relatório Diário — orquestra tudo:
      (não repete o mesmo plano todo dia — veja estado.py):
        - Checa notícias de risco
        - Checa calendário de resultados (evita véspera de balanço)
-       - Calcula stop/alvo (ATR + suporte/resistência)
+       - Calcula stop/alvo (ATR + suporte/resistência, com teto de risco)
        - Calcula tamanho de posição sugerido (gestão de risco)
        - Sugere parâmetros de opção (strike/vencimento)
 
 A lógica principal (gerar_e_enviar_relatorio) é parametrizável, pra poder
 ser reaproveitada por outros relatórios (ex: relatorio_tarde.py, com
-watchlist e prazo diferentes) sem duplicar código.
+watchlist, prazo e motor de indicadores diferentes) sem duplicar código.
 
 USO (relatório da manhã, padrão):
     python relatorio_diario.py
@@ -39,9 +39,11 @@ PASTA_GRAFICOS = "graficos_tmp"
 
 
 def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
-                         atr_mult: float = 1.5, risco_retorno: float = 2.0) -> str:
+                         atr_mult: float = 1.5, risco_retorno: float = 2.0,
+                         risco_maximo_atr_mult: float = 3.0, margem_saida_estado: int = 2) -> str:
     """
     Monta o bloco de texto para UM ativo no resumo final.
+    - Direção "neutro" (sinais empatados/conflitantes): só mostra o placar, nunca plano completo.
     - Nível < nivel_detalhe: só mostra placar e motivos.
     - Nível >= nivel_detalhe e já alertado antes (mesma direção): versão curta.
     - Nível >= nivel_detalhe e é alerta NOVO: plano completo.
@@ -49,13 +51,18 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
     ticker = resultado["ticker"]
     score = resultado["score"]
     direcao = resultado["direcao"]
-    emoji = "🟢" if direcao == "compra" else "🔴"
-    palavra = "COMPRA" if direcao == "compra" else "VENDA"
+
+    if direcao == "neutro":
+        emoji, palavra = "⚪", "NEUTRO"
+    elif direcao == "compra":
+        emoji, palavra = "🟢", "COMPRA"
+    else:
+        emoji, palavra = "🔴", "VENDA"
 
     cabecalho = f"{emoji} <b>{ticker} — {score}/10 ({palavra})</b>"
     motivos_txt = "\n".join(f"  • {m}" for m in resultado["motivos"])
 
-    if score < nivel_detalhe:
+    if direcao == "neutro" or score < nivel_detalhe:
         return f"{cabecalho}\n{motivos_txt}"
 
     if not eh_alerta_novo(estado, ticker, score, direcao, nivel_detalhe):
@@ -83,7 +90,8 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
         )
 
     df = resultado["df"]
-    stop_alvo = sugerir_stop_alvo(df, direcao, atr_mult=atr_mult, risco_retorno=risco_retorno)
+    stop_alvo = sugerir_stop_alvo(df, direcao, atr_mult=atr_mult, risco_retorno=risco_retorno,
+                                   risco_maximo_atr_mult=risco_maximo_atr_mult)
     opcao = sugerir_parametros_opcao(resultado["preco"], direcao)
     posicao = calcular_tamanho_posicao(config.CAPITAL_DISPONIVEL, config.RISCO_POR_OPERACAO_PCT,
                                         stop_alvo["preco_entrada"], stop_alvo["stop"])
@@ -127,13 +135,18 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
 def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
                               arquivo_estado="estado.json", atr_mult: float = 1.5,
                               risco_retorno: float = 2.0, titulo: str = "Relatório B3",
-                              nota_extra: str = ""):
+                              nota_extra: str = "", usar_curto_prazo: bool = False,
+                              projetar_volume: bool = False, risco_maximo_atr_mult: float = None,
+                              margem_saida_estado: int = None):
     watchlist = watchlist or config.WATCHLIST
     periodo = periodo or config.PERIODO_HISTORICO
     nivel_detalhe = nivel_detalhe if nivel_detalhe is not None else config.NIVEL_DETALHE
+    risco_maximo_atr_mult = risco_maximo_atr_mult if risco_maximo_atr_mult is not None else config.RISCO_MAXIMO_ATR_MULT
+    margem_saida_estado = margem_saida_estado if margem_saida_estado is not None else config.MARGEM_SAIDA_ESTADO
 
     print(f"[{titulo}] Rodando screener...")
-    resultados = rodar_screener(watchlist=watchlist, periodo=periodo)
+    resultados = rodar_screener(watchlist=watchlist, periodo=periodo,
+                                 usar_curto_prazo=usar_curto_prazo, projetar_volume=projetar_volume)
     hoje = date.today().strftime("%d/%m/%Y")
 
     if not resultados:
@@ -158,8 +171,12 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
     print("Checando notícias/calendário e montando resumo...")
     blocos = []
     for r in resultados:
-        blocos.append(montar_bloco_resumo(r, estado, nivel_detalhe, atr_mult=atr_mult, risco_retorno=risco_retorno))
-        estado = atualizar_estado(estado, r["ticker"], r["score"], r["direcao"], nivel_detalhe)
+        blocos.append(montar_bloco_resumo(r, estado, nivel_detalhe, atr_mult=atr_mult,
+                                           risco_retorno=risco_retorno,
+                                           risco_maximo_atr_mult=risco_maximo_atr_mult,
+                                           margem_saida_estado=margem_saida_estado))
+        estado = atualizar_estado(estado, r["ticker"], r["score"], r["direcao"], nivel_detalhe,
+                                   margem_saida=margem_saida_estado)
 
     salvar_estado(estado, arquivo_estado)
 
