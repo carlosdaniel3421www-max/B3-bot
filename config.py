@@ -18,8 +18,8 @@ OPLAB_TOKEN = os.environ.get("OPLAB_TOKEN", "")  # deixe vazio se não tiver
 # Ativos que você opera.
 WATCHLIST = [
     "PETR4", "VALE3", "ITUB4", "BBAS3", "WEGE3", "BBDC4", "PRIO3",
-    "SUZB3", "B3SA3", "ELET3", "ELET6", "ABEV3", "RENT3", "EQTL3",
-    "JBSS3", "CMIG4", "GGBR4", "USIM5", "RAIL3", "LREN3",
+    "SUZB3", "B3SA3", "AXIA3", "AXIA6", "ABEV3", "RENT3", "EQTL3",
+    "JBSS32", "CMIG4", "GGBR4", "USIM5", "RAIL3", "LREN3",
 ]
 
 NIVEL_DETALHE = 6          # nível mínimo (0-10) para receber plano de entrada completo
@@ -46,8 +46,8 @@ NOME_EMPRESA = {
     "PETR4": "Petrobras", "VALE3": "Vale", "ITUB4": "Itaú Unibanco",
     "BBAS3": "Banco do Brasil", "WEGE3": "WEG", "BBDC4": "Bradesco",
     "PRIO3": "PetroRio", "SUZB3": "Suzano", "B3SA3": "B3",
-    "ELET3": "Eletrobras", "ELET6": "Eletrobras", "ABEV3": "Ambev",
-    "RENT3": "Localiza", "EQTL3": "Equatorial Energia", "JBSS3": "JBS",
+    "AXIA3": "Axia Energia", "AXIA6": "Axia Energia", "ABEV3": "Ambev",
+    "RENT3": "Localiza", "EQTL3": "Equatorial Energia", "JBSS32": "JBS",
     "CMIG4": "Cemig", "GGBR4": "Gerdau", "USIM5": "Usiminas",
     "RAIL3": "Rumo", "LREN3": "Lojas Renner",
 }
