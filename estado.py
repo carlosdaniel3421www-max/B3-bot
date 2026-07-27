@@ -49,8 +49,19 @@ def eh_alerta_novo(estado: dict, ticker: str, score: int, direcao: str, nivel_de
     return False
 
 
-def atualizar_estado(estado: dict, ticker: str, score: int, direcao: str, nivel_detalhe: int) -> dict:
-    """Atualiza (ou remove) a entrada do ativo no estado, conforme o nível atual."""
+def atualizar_estado(estado: dict, ticker: str, score: int, direcao: str, nivel_detalhe: int, margem_saida: int = 2) -> dict:
+    """
+    Atualiza (ou remove) a entrada do ativo no estado, conforme o nível atual.
+
+    margem_saida: só considera o sinal REALMENTE encerrado (e limpa a memória)
+    quando o score cai mais que essa margem abaixo do nível de detalhe. Isso
+    evita "flapping" — um ativo oscilando entre 5 e 6, por exemplo, não
+    dispara o plano completo de novo a cada dia que toca 6, porque enquanto
+    ele estiver na "zona de amortecimento" (nivel_detalhe - margem_saida até
+    nivel_detalhe), a memória do alerta anterior é preservada.
+    """
+    limite_saida = nivel_detalhe - margem_saida
+
     if score >= nivel_detalhe:
         anterior = estado.get(ticker, {})
         estado[ticker] = {
@@ -59,6 +70,8 @@ def atualizar_estado(estado: dict, ticker: str, score: int, direcao: str, nivel_
             "data_primeiro_alerta": anterior.get("data_primeiro_alerta", date.today().isoformat())
                                      if anterior.get("direcao") == direcao else date.today().isoformat(),
         }
-    else:
-        estado.pop(ticker, None)  # sinal caiu de nível -> esquece, próxima vez que subir é "novo" de novo
+    elif score < limite_saida:
+        estado.pop(ticker, None)  # caiu de vez -> esquece, próxima subida conta como sinal novo
+    # else: está na zona de amortecimento -> não mexe no estado, preserva a memória
+
     return estado
