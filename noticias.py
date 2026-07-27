@@ -28,6 +28,16 @@ PALAVRAS_POSITIVAS = [
     "expansão", "fusão", "aquisição estratégica",
 ]
 
+# Palavras que, quando aparecem na mesma manchete, invertem ou anulam o
+# sentido de uma palavra de risco (ex: "nega recuperação judicial" é o
+# OPOSTO de estar em recuperação judicial). Detecção simples por presença
+# na frase — não é 100% à prova de falhas, mas cobre os casos mais comuns.
+PALAVRAS_NEGACAO = [
+    "nega", "negou", "desmente", "desmentiu", "descarta", "descartou",
+    "rejeita", "rejeitou", "arquiva", "arquivou", "improcedente",
+    "sem provas", "não confirma", "nao confirma", "nega rumor",
+]
+
 
 def buscar_noticias(nome_busca: str, max_itens: int = 12):
     """
@@ -53,19 +63,25 @@ def classificar_noticias(noticias: list) -> dict:
     """Classifica manchetes em alertas de risco e sinais positivos."""
     alertas = []
     positivas = []
+    neutralizadas = []  # notícias que bateram palavra de risco, mas com negação (falso-positivo evitado)
 
     for n in noticias:
         titulo_lower = n["titulo"].lower()
+        tem_negacao = any(neg in titulo_lower for neg in PALAVRAS_NEGACAO)
+
         for palavra in PALAVRAS_RISCO:
             if palavra in titulo_lower:
-                alertas.append({**n, "motivo": palavra})
+                if tem_negacao:
+                    neutralizadas.append({**n, "motivo": palavra})
+                else:
+                    alertas.append({**n, "motivo": palavra})
                 break
         for palavra in PALAVRAS_POSITIVAS:
             if palavra in titulo_lower:
                 positivas.append({**n, "motivo": palavra})
                 break
 
-    return {"alertas": alertas, "positivas": positivas, "total_analisado": len(noticias)}
+    return {"alertas": alertas, "positivas": positivas, "neutralizadas": neutralizadas, "total_analisado": len(noticias)}
 
 
 def checar_risco_noticias(nome_busca: str) -> dict:
