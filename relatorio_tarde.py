@@ -31,6 +31,10 @@ if __name__ == "__main__":
         titulo="Relatório B3 — Tarde (prazo curto)",
         nota_extra=(
             f"Foco em operações de prazo mais curto (~{config.MAX_DIAS_HOLDING_TARDE} dias úteis, "
-            f"tipo até o fim da semana). Stop e alvo mais apertados que o relatório da manhã."
+            f"tipo até o fim da semana). Indicadores mais rápidos (SMA5/10/20, RSI7, MACD 5/13/5) "
+            f"no gráfico diário, confirmados (ou não) pelo gráfico de 1 hora."
         ),
+        usar_curto_prazo=True,
+        projetar_volume=True,
+        confirmar_intradiario=True,
     )
