@@ -219,6 +219,53 @@ def projetar_volume_dia_atual(df: pd.DataFrame, hora_abertura: float = 10.0, hor
     return df
 
 
+def avaliar_timeframe_horario(ticker: str, periodo: str = "5d") -> dict:
+    """
+    Leitura rápida no gráfico de 1 HORA (intradiário), usada só pelo
+    relatório da tarde pra CONFIRMAR (ou contestar) o sinal de curto prazo
+    calculado no gráfico diário. Não é usada pelo relatório da manhã.
+
+    Lógica simples: tendência via EMA9 x EMA21 no horário + RSI(14) horário
+    confirmando o lado. Se não bater os dois, fica "neutro" (sem força
+    suficiente pra confirmar nada).
+    """
+    try:
+        df_h = baixar_dados(ticker, periodo=periodo, intervalo="60m")
+    except Exception:
+        return {"direcao": "indisponivel", "motivo": "Dados intradiários indisponíveis"}
+
+    if len(df_h) < 25:
+        return {"direcao": "indisponivel", "motivo": "Histórico intradiário insuficiente"}
+
+    df_h["ema9"] = df_h["close"].ewm(span=9, adjust=False).mean()
+    df_h["ema21"] = df_h["close"].ewm(span=21, adjust=False).mean()
+
+    delta = df_h["close"].diff()
+    ganho = delta.clip(lower=0)
+    perda = -delta.clip(upper=0)
+    media_ganho = ganho.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
+    media_perda = perda.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
+    rs = media_ganho / media_perda
+    df_h["rsi_h"] = 100 - (100 / (1 + rs))
+
+    ultimo = df_h.iloc[-1]
+    tendencia_alta = ultimo["close"] > ultimo["ema9"] > ultimo["ema21"]
+    tendencia_baixa = ultimo["close"] < ultimo["ema9"] < ultimo["ema21"]
+
+    if tendencia_alta and ultimo["rsi_h"] > 50:
+        direcao = "compra"
+    elif tendencia_baixa and ultimo["rsi_h"] < 50:
+        direcao = "venda"
+    else:
+        direcao = "neutro"
+
+    return {
+        "direcao": direcao,
+        "preco": round(ultimo["close"], 2),
+        "rsi_h": round(ultimo["rsi_h"], 0),
+    }
+
+
 def calcular_indicadores_curto_prazo(df: pd.DataFrame) -> pd.DataFrame:
     """
     Versão dos indicadores com períodos mais curtos (SMA5/10/20, RSI7,
