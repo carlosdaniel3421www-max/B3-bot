@@ -7,7 +7,7 @@ import time
 from b3_swing_analyzer import (
     baixar_dados, calcular_indicadores, avaliar_ativo,
     calcular_indicadores_curto_prazo, avaliar_ativo_curto_prazo,
-    projetar_volume_dia_atual,
+    projetar_volume_dia_atual, avaliar_timeframe_horario,
 )
 
 # Lista base: principais ativos do Ibovespa com opções líquidas na B3.
@@ -20,7 +20,8 @@ WATCHLIST_PADRAO = [
 
 
 def rodar_screener(watchlist=None, periodo="6mo", pausa=0.3,
-                    usar_curto_prazo: bool = False, projetar_volume: bool = False) -> list:
+                    usar_curto_prazo: bool = False, projetar_volume: bool = False,
+                    confirmar_intradiario: bool = False) -> list:
     """
     Roda a avaliação (placar 0-10) para cada ativo da watchlist.
     `pausa` evita sobrecarregar a fonte de dados com requisições muito rápidas.
@@ -30,6 +31,9 @@ def rodar_screener(watchlist=None, periodo="6mo", pausa=0.3,
     projetar_volume: projeta o volume do candle de hoje pro dia inteiro,
         caso o pregão ainda esteja em andamento (evita falso negativo na
         comparação de volume por causa de candle parcial).
+    confirmar_intradiario: busca o gráfico de 1 HORA e usa ele pra confirmar
+        (+1 ponto, até o máximo de 10) ou contestar (-2 pontos) o sinal do
+        gráfico diário. Só faz sentido junto com usar_curto_prazo=True.
     Retorna lista de dicts ordenada do nível mais alto para o mais baixo.
     """
     watchlist = watchlist or WATCHLIST_PADRAO
@@ -49,12 +53,28 @@ def rodar_screener(watchlist=None, periodo="6mo", pausa=0.3,
             else:
                 avaliacao = avaliar_ativo(df)
 
+            motivos = list(avaliacao["motivos"])
+            score = avaliacao["score"]
+            direcao = avaliacao["direcao"]
+
+            if confirmar_intradiario and direcao != "neutro":
+                horario = avaliar_timeframe_horario(ticker)
+                if horario["direcao"] == direcao:
+                    score = min(10, score + 1)
+                    motivos.append(f"✅ Gráfico de 1h confirma a mesma direção (RSI horário {horario['rsi_h']:.0f})")
+                elif horario["direcao"] not in ("neutro", "indisponivel"):
+                    score = max(0, score - 2)
+                    motivos.append(
+                        f"⚠️ Gráfico de 1h está na direção OPOSTA (RSI horário {horario['rsi_h']:.0f}) "
+                        f"— cautela redobrada, sinal pode estar perdendo força intradiária"
+                    )
+
             resultados.append({
                 "ticker": ticker,
-                "score": avaliacao["score"],
-                "direcao": avaliacao["direcao"],
+                "score": score,
+                "direcao": direcao,
                 "preco": avaliacao["preco_atual"],
-                "motivos": avaliacao["motivos"],
+                "motivos": motivos,
                 "df": df,  # mantém o dataframe para uso posterior (gráfico, stop/alvo)
             })
         except Exception as e:
