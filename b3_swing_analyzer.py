@@ -61,7 +61,7 @@ def baixar_dados(ticker: str, periodo: str = "1y", intervalo: str = "1d", tentat
             ultimo_erro = str(e)
 
         if tentativa < tentativas:
-            time.sleep(2 * tentativa)
+            time.sleep(2 * tentativa)  # espera um pouco mais a cada nova tentativa
 
     raise ValueError(f"Não foi possível baixar dados para {ticker} após {tentativas} tentativas. Último erro: {ultimo_erro}")
 
@@ -146,6 +146,14 @@ def sugerir_stop_alvo(df: pd.DataFrame, direcao: str, atr_mult: float = 1.5, ris
                        risco_maximo_atr_mult: float = 3.0) -> dict:
     """
     Sugere stop-loss e alvo (take-profit) com base em ATR e suporte/resistência.
+    direcao: "compra" ou "venda"
+    atr_mult: quantos ATRs de folga o stop deixa além do suporte/resistência
+              (menor = stop mais apertado, adequado pra prazo mais curto)
+    risco_retorno: múltiplo do risco usado pra definir o alvo (2.0 = alvo a 2x
+                   a distância do stop; menor = alvo mais perto, atingido mais rápido)
+    risco_maximo_atr_mult: TETO de risco por ação, em múltiplos de ATR. Evita que
+                   ativos em forte tendência (onde o suporte/resistência de 20 dias
+                   fica muito longe do preço) gerem stops enormes e desproporcionais.
     """
     ultimo = df.iloc[-1]
     preco = ultimo["close"]
@@ -153,13 +161,13 @@ def sugerir_stop_alvo(df: pd.DataFrame, direcao: str, atr_mult: float = 1.5, ris
 
     if direcao == "compra":
         stop = min(ultimo["suporte"], preco - atr_mult * atr)
-        piso_stop = preco - risco_maximo_atr_mult * atr
+        piso_stop = preco - risco_maximo_atr_mult * atr  # nunca deixa o stop mais longe que isso
         stop = max(stop, piso_stop)
         risco = preco - stop
         alvo = preco + risco_retorno * risco
     else:  # venda
         stop = max(ultimo["resistencia"], preco + atr_mult * atr)
-        teto_stop = preco + risco_maximo_atr_mult * atr
+        teto_stop = preco + risco_maximo_atr_mult * atr  # nunca deixa o stop mais longe que isso
         stop = min(stop, teto_stop)
         risco = stop - preco
         alvo = preco - risco_retorno * risco
@@ -176,22 +184,33 @@ def sugerir_stop_alvo(df: pd.DataFrame, direcao: str, atr_mult: float = 1.5, ris
 def projetar_volume_dia_atual(df: pd.DataFrame, hora_abertura: float = 10.0, hora_fechamento: float = 17.0) -> pd.DataFrame:
     """
     Se a última barra do df for do dia de HOJE e o pregão ainda estiver em
-    andamento, projeta o volume dessa barra pro dia inteiro.
+    andamento, projeta o volume dessa barra pro dia inteiro (baseado na
+    fração de tempo já decorrida do pregão), pra não subestimar comparações
+    de volume (ex: "volume acima da média") por causa de um candle parcial.
+
+    Isso é relevante pro relatório da tarde (13h): nesse horário, o candle
+    de hoje só tem ~3h de volume acumulado, e comparar isso direto com a
+    média de 20 dias (candles completos) tende a dar falso negativo.
+
+    É uma estimativa grosseira (assume volume distribuído uniformemente ao
+    longo do pregão, o que raramente é exato — B3 costuma ter mais volume
+    na abertura e no fechamento) — melhor que ignorar o problema, mas não é
+    uma correção perfeita.
     """
     from datetime import datetime, timedelta
 
     if df.empty:
         return df
 
-    agora_brt = datetime.utcnow() - timedelta(hours=3)
+    agora_brt = datetime.utcnow() - timedelta(hours=3)  # Brasília = UTC-3 (sem horário de verão)
     ultima_data = df.index[-1].date()
 
     if ultima_data != agora_brt.date():
-        return df
+        return df  # última barra já é de um pregão fechado, não precisa projetar
 
     hora_atual = agora_brt.hour + agora_brt.minute / 60
     if hora_atual <= hora_abertura or hora_atual >= hora_fechamento:
-        return df
+        return df  # fora do pregão
 
     fracao_decorrida = max((hora_atual - hora_abertura) / (hora_fechamento - hora_abertura), 0.05)
 
@@ -201,7 +220,14 @@ def projetar_volume_dia_atual(df: pd.DataFrame, hora_abertura: float = 10.0, hor
 
 
 def calcular_indicadores_curto_prazo(df: pd.DataFrame) -> pd.DataFrame:
-    """Versão dos indicadores com períodos mais curtos, pra decisões de poucos dias."""
+    """
+    Versão dos indicadores com períodos mais curtos (SMA5/10/20, RSI7,
+    MACD rápido 5/13/5, Estocástico(7), suporte/resistência de 10 dias),
+    pensada pra decisões de poucos dias (ex: relatório da tarde, foco
+    "até o fim da semana"). Grava em colunas com sufixo _curto pra não
+    conflitar com os indicadores padrão (usados no gráfico e no relatório
+    da manhã).
+    """
     df["sma5_curto"] = df["close"].rolling(5).mean()
     df["sma10_curto"] = df["close"].rolling(10).mean()
     df["sma20_curto"] = df["close"].rolling(20).mean()
@@ -250,6 +276,7 @@ def avaliar_ativo_curto_prazo(df: pd.DataFrame) -> dict:
     pontos_compra, pontos_venda = 0, 0
     motivos_compra, motivos_venda = [], []
 
+    # --- 1. Regime de tendência de curtíssimo prazo — até 2 pontos ---
     em_forte_alta = ultimo["close"] > ultimo["sma5_curto"] > ultimo["sma10_curto"] > ultimo["sma20_curto"]
     em_alta = em_forte_alta or (ultimo["close"] > ultimo["sma5_curto"] > ultimo["sma10_curto"])
     em_forte_baixa = ultimo["close"] < ultimo["sma5_curto"] < ultimo["sma10_curto"] < ultimo["sma20_curto"]
@@ -268,10 +295,11 @@ def avaliar_ativo_curto_prazo(df: pd.DataFrame) -> dict:
         pontos_venda += 1
         motivos_venda.append("Tendência de curtíssimo prazo de baixa (preço < SMA5 < SMA10)")
 
+    # --- 2. RSI(7) — interpretação depende do regime ---
     rsi = ultimo["rsi_curto"]
     if em_alta:
         if rsi > 70:
-            pontos_compra += 1
+            pontos_compra += 2
             motivos_compra.append(f"RSI(7) em {rsi:.0f} — momentum forte dentro da tendência de alta")
         elif rsi < 40:
             pts = 2 if rsi < 30 else 1
@@ -279,7 +307,7 @@ def avaliar_ativo_curto_prazo(df: pd.DataFrame) -> dict:
             motivos_compra.append(f"RSI(7) em {rsi:.0f} — recuo dentro da tendência de alta")
     elif em_baixa:
         if rsi < 30:
-            pontos_venda += 1
+            pontos_venda += 2
             motivos_venda.append(f"RSI(7) em {rsi:.0f} — momentum forte dentro da tendência de baixa")
         elif rsi > 60:
             pts = 2 if rsi > 70 else 1
@@ -299,6 +327,7 @@ def avaliar_ativo_curto_prazo(df: pd.DataFrame) -> dict:
             pontos_venda += 1
             motivos_venda.append(f"RSI(7) em {rsi:.0f} — zona de sobrecompra")
 
+    # --- 3. MACD rápido (5/13/5) — momentum direcional puro ---
     atr_curto = ultimo["atr_curto"] if pd.notna(ultimo["atr_curto"]) else 0
     diff_macd = ultimo["macd_curto"] - ultimo["macd_sinal_curto"]
     zona_morta_macd = 0.05 * atr_curto if atr_curto > 0 else 0
@@ -317,10 +346,11 @@ def avaliar_ativo_curto_prazo(df: pd.DataFrame) -> dict:
         extra = " e perdendo força" if not hist_cresceu else ""
         motivos_venda.append(f"MACD rápido (5/13/5) abaixo do sinal (momentum vendedor{extra})")
 
+    # --- 4. Estocástico(7) — mesma lógica condicional ---
     stoch = ultimo["stoch_k_curto"]
     if em_alta:
         if stoch > 80:
-            pontos_compra += 1
+            pontos_compra += 2
             motivos_compra.append(f"Estocástico(7) em {stoch:.0f} — momentum forte, compatível com tendência de alta")
         elif stoch < 35:
             pts = 2 if stoch < 20 else 1
@@ -328,7 +358,7 @@ def avaliar_ativo_curto_prazo(df: pd.DataFrame) -> dict:
             motivos_compra.append(f"Estocástico(7) em {stoch:.0f} — recuo dentro da tendência de alta")
     elif em_baixa:
         if stoch < 20:
-            pontos_venda += 1
+            pontos_venda += 2
             motivos_venda.append(f"Estocástico(7) em {stoch:.0f} — momentum forte, compatível com tendência de baixa")
         elif stoch > 65:
             pts = 2 if stoch > 80 else 1
@@ -348,6 +378,7 @@ def avaliar_ativo_curto_prazo(df: pd.DataFrame) -> dict:
             pontos_venda += 1
             motivos_venda.append(f"Estocástico(7) em {stoch:.0f} — sobrecompra")
 
+    # --- 5. Suporte/Resistência de 10 dias — distingue rompimento de toque ---
     resistencia_anterior = penultimo["resistencia_curta"]
     suporte_anterior = penultimo["suporte_curto"]
     media_volume = df["volume"].rolling(10).mean().iloc[-1]
@@ -361,23 +392,31 @@ def avaliar_ativo_curto_prazo(df: pd.DataFrame) -> dict:
         dist_suporte = (ultimo["close"] - ultimo["suporte_curto"]) / faixa
 
         if dist_suporte > 0.85:
-            if rompeu_resistencia:
-                pts = 2 if volume_alto else 1
+            if em_alta:
+                if rompeu_resistencia:
+                    pts = 2 if volume_alto else 1
+                    extra = " com volume acima da média (rompimento confirmado)" if volume_alto else ""
+                    motivos_compra.append(f"Rompendo a máxima de 10 dias{extra}")
+                else:
+                    pts = 1
+                    motivos_compra.append("Sustentando perto da máxima de 10 dias dentro da tendência de alta")
                 pontos_compra += pts
-                extra = " com volume acima da média (rompimento confirmado)" if volume_alto else ""
-                motivos_compra.append(f"Rompendo a máxima de 10 dias{extra}")
-            elif not em_alta:
+            else:
                 pts = 2 if volume_alto else 1
                 pontos_venda += pts
                 extra = " com volume acima da média" if volume_alto else ""
                 motivos_venda.append(f"Testando resistência de 10 dias sem tendência de alta{extra} — risco de rejeição")
         elif dist_suporte < 0.15:
-            if rompeu_suporte:
-                pts = 2 if volume_alto else 1
+            if em_baixa:
+                if rompeu_suporte:
+                    pts = 2 if volume_alto else 1
+                    extra = " com volume acima da média (rompimento confirmado)" if volume_alto else ""
+                    motivos_venda.append(f"Rompendo a mínima de 10 dias{extra}")
+                else:
+                    pts = 1
+                    motivos_venda.append("Sustentando perto da mínima de 10 dias dentro da tendência de baixa")
                 pontos_venda += pts
-                extra = " com volume acima da média (rompimento confirmado)" if volume_alto else ""
-                motivos_venda.append(f"Rompendo a mínima de 10 dias{extra}")
-            elif not em_baixa:
+            else:
                 pts = 2 if volume_alto else 1
                 pontos_compra += pts
                 extra = " com volume acima da média" if volume_alto else ""
@@ -430,6 +469,7 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
     pontos_compra, pontos_venda = 0, 0
     motivos_compra, motivos_venda = [], []
 
+    # --- 1. Regime de tendência (médias móveis) — até 2 pontos ---
     em_forte_alta = ultimo["close"] > ultimo["sma21"] > ultimo["sma50"] > ultimo["sma200"]
     em_alta = em_forte_alta or (ultimo["close"] > ultimo["sma21"] > ultimo["sma50"])
     em_forte_baixa = ultimo["close"] < ultimo["sma21"] < ultimo["sma50"] < ultimo["sma200"]
@@ -448,10 +488,11 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
         pontos_venda += 1
         motivos_venda.append("Tendência de baixa no curto/médio prazo")
 
+    # --- 2. RSI — interpretação depende do regime de tendência ---
     rsi = ultimo["rsi"]
     if em_alta:
         if rsi > 70:
-            pontos_compra += 1
+            pontos_compra += 2
             motivos_compra.append(f"RSI em {rsi:.0f} — momentum forte dentro da tendência de alta (não é sinal de topo)")
         elif rsi < 40:
             pts = 2 if rsi < 30 else 1
@@ -459,13 +500,13 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
             motivos_compra.append(f"RSI em {rsi:.0f} — recuo dentro da tendência de alta (possível ponto de compra)")
     elif em_baixa:
         if rsi < 30:
-            pontos_venda += 1
+            pontos_venda += 2
             motivos_venda.append(f"RSI em {rsi:.0f} — momentum forte dentro da tendência de baixa (não é sinal de fundo)")
         elif rsi > 60:
             pts = 2 if rsi > 70 else 1
             pontos_venda += pts
             motivos_venda.append(f"RSI em {rsi:.0f} — repique dentro da tendência de baixa (possível ponto de venda)")
-    else:
+    else:  # mercado lateral -> reversão à média clássica
         if rsi < 30:
             pontos_compra += 2
             motivos_compra.append(f"RSI em {rsi:.0f} — sobrevenda em mercado lateral")
@@ -479,6 +520,7 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
             pontos_venda += 1
             motivos_venda.append(f"RSI em {rsi:.0f} — zona de sobrecompra")
 
+    # --- 3. MACD — momentum direcional puro, não depende do regime ---
     atr_atual = ultimo["atr"] if pd.notna(ultimo["atr"]) else 0
     diff_macd = ultimo["macd"] - ultimo["macd_sinal"]
     zona_morta_macd = 0.05 * atr_atual if atr_atual > 0 else 0
@@ -497,10 +539,11 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
         extra = " e perdendo força" if not hist_cresceu else ""
         motivos_venda.append(f"MACD abaixo da linha de sinal (momentum vendedor{extra})")
 
+    # --- 4. Estocástico — mesma lógica condicional do RSI ---
     stoch = ultimo["stoch_k"]
     if em_alta:
         if stoch > 80:
-            pontos_compra += 1
+            pontos_compra += 2
             motivos_compra.append(f"Estocástico em {stoch:.0f} — momentum forte, compatível com tendência de alta")
         elif stoch < 35:
             pts = 2 if stoch < 20 else 1
@@ -508,7 +551,7 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
             motivos_compra.append(f"Estocástico em {stoch:.0f} — recuo dentro da tendência de alta")
     elif em_baixa:
         if stoch < 20:
-            pontos_venda += 1
+            pontos_venda += 2
             motivos_venda.append(f"Estocástico em {stoch:.0f} — momentum forte, compatível com tendência de baixa")
         elif stoch > 65:
             pts = 2 if stoch > 80 else 1
@@ -528,6 +571,7 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
             pontos_venda += 1
             motivos_venda.append(f"Estocástico em {stoch:.0f} — sobrecompra")
 
+    # --- 5. Suporte/Resistência — distingue ROMPIMENTO de simples TOQUE ---
     resistencia_anterior = penultimo["resistencia"]
     suporte_anterior = penultimo["suporte"]
     media_volume = df["volume"].rolling(20).mean().iloc[-1]
@@ -541,23 +585,31 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
         dist_suporte = (ultimo["close"] - ultimo["suporte"]) / faixa
 
         if dist_suporte > 0.85:
-            if rompeu_resistencia:
-                pts = 2 if volume_alto else 1
+            if em_alta:
+                if rompeu_resistencia:
+                    pts = 2 if volume_alto else 1
+                    extra = " com volume acima da média (rompimento confirmado)" if volume_alto else ""
+                    motivos_compra.append(f"Rompendo a máxima recente{extra}")
+                else:
+                    pts = 1
+                    motivos_compra.append("Sustentando perto da máxima recente dentro da tendência de alta")
                 pontos_compra += pts
-                extra = " com volume acima da média (rompimento confirmado)" if volume_alto else ""
-                motivos_compra.append(f"Rompendo a máxima recente{extra}")
-            elif not em_alta:
+            else:
                 pts = 2 if volume_alto else 1
                 pontos_venda += pts
                 extra = " com volume acima da média" if volume_alto else ""
                 motivos_venda.append(f"Preço testando resistência sem tendência de alta confirmada{extra} — risco de rejeição")
         elif dist_suporte < 0.15:
-            if rompeu_suporte:
-                pts = 2 if volume_alto else 1
+            if em_baixa:
+                if rompeu_suporte:
+                    pts = 2 if volume_alto else 1
+                    extra = " com volume acima da média (rompimento confirmado)" if volume_alto else ""
+                    motivos_venda.append(f"Rompendo a mínima recente{extra}")
+                else:
+                    pts = 1
+                    motivos_venda.append("Sustentando perto da mínima recente dentro da tendência de baixa")
                 pontos_venda += pts
-                extra = " com volume acima da média (rompimento confirmado)" if volume_alto else ""
-                motivos_venda.append(f"Rompendo a mínima recente{extra}")
-            elif not em_baixa:
+            else:
                 pts = 2 if volume_alto else 1
                 pontos_compra += pts
                 extra = " com volume acima da média" if volume_alto else ""
@@ -596,6 +648,7 @@ def plotar_grafico(df: pd.DataFrame, ticker: str, caminho_saida: str):
     )
     ax_preco, ax_vol, ax_rsi_stoch, ax_macd = eixos
 
+    # --- Preço + médias + suporte/resistência ---
     ax_preco.plot(df.index, df["close"], label="Fechamento", color="black", linewidth=1.2)
     ax_preco.plot(df.index, df["sma9"], label="SMA9", color="#1f77b4", linewidth=0.9)
     ax_preco.plot(df.index, df["sma21"], label="SMA21", color="#ff7f0e", linewidth=0.9)
@@ -608,11 +661,13 @@ def plotar_grafico(df: pd.DataFrame, ticker: str, caminho_saida: str):
     ax_preco.legend(loc="upper left", fontsize=8, ncol=4)
     ax_preco.grid(alpha=0.3)
 
+    # --- Volume ---
     cores_vol = np.where(df["close"] >= df["close"].shift(1), "green", "red")
     ax_vol.bar(df.index, df["volume"], color=cores_vol, alpha=0.6, width=1)
     ax_vol.set_ylabel("Volume")
     ax_vol.grid(alpha=0.3)
 
+    # --- RSI + Estocástico ---
     ax_rsi_stoch.plot(df.index, df["rsi"], label="RSI(14)", color="blue", linewidth=0.9)
     ax_rsi_stoch.plot(df.index, df["stoch_k"], label="%K Estocástico", color="orange", linewidth=0.7)
     ax_rsi_stoch.axhline(70, color="red", linestyle="--", linewidth=0.6)
@@ -621,6 +676,7 @@ def plotar_grafico(df: pd.DataFrame, ticker: str, caminho_saida: str):
     ax_rsi_stoch.legend(loc="upper left", fontsize=8)
     ax_rsi_stoch.grid(alpha=0.3)
 
+    # --- MACD ---
     ax_macd.plot(df.index, df["macd"], label="MACD", color="blue", linewidth=0.9)
     ax_macd.plot(df.index, df["macd_sinal"], label="Sinal", color="orange", linewidth=0.9)
     cores_hist = np.where(df["macd_hist"] >= 0, "green", "red")
