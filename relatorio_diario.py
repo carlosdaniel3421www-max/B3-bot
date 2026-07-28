@@ -136,7 +136,8 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
                               arquivo_estado="estado.json", atr_mult: float = 1.5,
                               risco_retorno: float = 2.0, titulo: str = "Relatório B3",
                               nota_extra: str = "", usar_curto_prazo: bool = False,
-                              projetar_volume: bool = False, risco_maximo_atr_mult: float = None,
+                              projetar_volume: bool = False, confirmar_intradiario: bool = False,
+                              risco_maximo_atr_mult: float = None,
                               margem_saida_estado: int = None):
     watchlist = watchlist or config.WATCHLIST
     periodo = periodo or config.PERIODO_HISTORICO
@@ -146,7 +147,8 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
 
     print(f"[{titulo}] Rodando screener...")
     resultados = rodar_screener(watchlist=watchlist, periodo=periodo,
-                                 usar_curto_prazo=usar_curto_prazo, projetar_volume=projetar_volume)
+                                 usar_curto_prazo=usar_curto_prazo, projetar_volume=projetar_volume,
+                                 confirmar_intradiario=confirmar_intradiario)
     hoje = date.today().strftime("%d/%m/%Y")
 
     if not resultados:
