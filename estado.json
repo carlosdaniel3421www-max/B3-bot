@@ -3,5 +3,10 @@
     "score": 8,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-07-29"
+  },
+  "BBAS3": {
+    "score": 6,
+    "direcao": "compra",
+    "data_primeiro_alerta": "2026-07-30"
   }
 }
