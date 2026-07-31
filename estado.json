@@ -8,5 +8,15 @@
     "score": 6,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-07-30"
+  },
+  "PETR4": {
+    "score": 6,
+    "direcao": "compra",
+    "data_primeiro_alerta": "2026-07-31"
+  },
+  "RAIL3": {
+    "score": 6,
+    "direcao": "compra",
+    "data_primeiro_alerta": "2026-07-31"
   }
 }
