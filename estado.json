@@ -18,5 +18,15 @@
     "score": 6,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-07-31"
+  },
+  "SUZB3": {
+    "score": 6,
+    "direcao": "compra",
+    "data_primeiro_alerta": "2026-07-31"
+  },
+  "USIM5": {
+    "score": 6,
+    "direcao": "venda",
+    "data_primeiro_alerta": "2026-07-31"
   }
 }
