@@ -146,14 +146,6 @@ def sugerir_stop_alvo(df: pd.DataFrame, direcao: str, atr_mult: float = 1.5, ris
                        risco_maximo_atr_mult: float = 3.0) -> dict:
     """
     Sugere stop-loss e alvo (take-profit) com base em ATR e suporte/resistência.
-    direcao: "compra" ou "venda"
-    atr_mult: quantos ATRs de folga o stop deixa além do suporte/resistência
-              (menor = stop mais apertado, adequado pra prazo mais curto)
-    risco_retorno: múltiplo do risco usado pra definir o alvo (2.0 = alvo a 2x
-                   a distância do stop; menor = alvo mais perto, atingido mais rápido)
-    risco_maximo_atr_mult: TETO de risco por ação, em múltiplos de ATR. Evita que
-                   ativos em forte tendência (onde o suporte/resistência de 20 dias
-                   fica muito longe do preço) gerem stops enormes e desproporcionais.
     """
     ultimo = df.iloc[-1]
     preco = ultimo["close"]
@@ -184,18 +176,7 @@ def sugerir_stop_alvo(df: pd.DataFrame, direcao: str, atr_mult: float = 1.5, ris
 def projetar_volume_dia_atual(df: pd.DataFrame, hora_abertura: float = 10.0, hora_fechamento: float = 17.0) -> pd.DataFrame:
     """
     Se a última barra do df for do dia de HOJE e o pregão ainda estiver em
-    andamento, projeta o volume dessa barra pro dia inteiro (baseado na
-    fração de tempo já decorrida do pregão), pra não subestimar comparações
-    de volume (ex: "volume acima da média") por causa de um candle parcial.
-
-    Isso é relevante pro relatório da tarde (13h): nesse horário, o candle
-    de hoje só tem ~3h de volume acumulado, e comparar isso direto com a
-    média de 20 dias (candles completos) tende a dar falso negativo.
-
-    É uma estimativa grosseira (assume volume distribuído uniformemente ao
-    longo do pregão, o que raramente é exato — B3 costuma ter mais volume
-    na abertura e no fechamento) — melhor que ignorar o problema, mas não é
-    uma correção perfeita.
+    andamento, projeta o volume dessa barra pro dia inteiro.
     """
     from datetime import datetime, timedelta
 
@@ -222,12 +203,7 @@ def projetar_volume_dia_atual(df: pd.DataFrame, hora_abertura: float = 10.0, hor
 def avaliar_timeframe_horario(ticker: str, periodo: str = "5d") -> dict:
     """
     Leitura rápida no gráfico de 1 HORA (intradiário), usada só pelo
-    relatório da tarde pra CONFIRMAR (ou contestar) o sinal de curto prazo
-    calculado no gráfico diário. Não é usada pelo relatório da manhã.
-
-    Lógica simples: tendência via EMA9 x EMA21 no horário + RSI(14) horário
-    confirmando o lado. Se não bater os dois, fica "neutro" (sem força
-    suficiente pra confirmar nada).
+    relatório da tarde pra CONFIRMAR (ou contestar) o sinal de curto prazo.
     """
     try:
         df_h = baixar_dados(ticker, periodo=periodo, intervalo="60m")
@@ -269,11 +245,7 @@ def avaliar_timeframe_horario(ticker: str, periodo: str = "5d") -> dict:
 def calcular_indicadores_curto_prazo(df: pd.DataFrame) -> pd.DataFrame:
     """
     Versão dos indicadores com períodos mais curtos (SMA5/10/20, RSI7,
-    MACD rápido 5/13/5, Estocástico(7), suporte/resistência de 10 dias),
-    pensada pra decisões de poucos dias (ex: relatório da tarde, foco
-    "até o fim da semana"). Grava em colunas com sufixo _curto pra não
-    conflitar com os indicadores padrão (usados no gráfico e no relatório
-    da manhã).
+    MACD rápido 5/13/5, Estocástico(7), suporte/resistência de 10 dias).
     """
     df["sma5_curto"] = df["close"].rolling(5).mean()
     df["sma10_curto"] = df["close"].rolling(10).mean()
@@ -312,10 +284,7 @@ def calcular_indicadores_curto_prazo(df: pd.DataFrame) -> pd.DataFrame:
 def avaliar_ativo_curto_prazo(df: pd.DataFrame) -> dict:
     """
     Igual a avaliar_ativo, mas usando os indicadores de período curto
-    (SMA5/10/20, RSI7, MACD 5/13/5, Estocástico7). Mesma lógica sensível
-    ao regime de tendência: RSI/Estocástico esticados = força dentro de
-    tendência, não reversão. Rompimento com volume = compra/venda conforme
-    a direção do rompimento, não o oposto.
+    (SMA5/10/20, RSI7, MACD 5/13/5, Estocástico7).
     """
     ultimo = df.iloc[-1]
     penultimo = df.iloc[-2] if len(df) > 1 else ultimo
@@ -492,23 +461,13 @@ def avaliar_ativo_curto_prazo(df: pd.DataFrame) -> dict:
 
 
 # --------------------------------------------------------------------------
-# 3. PLACAR DE CONFLUÊNCIA (heurística simples, não é garantia de nada)
+# 3. PLACAR DE CONFLUÊNCIA (Atualizado para pesos de Swing Trade Profissional)
 # --------------------------------------------------------------------------
 
 def avaliar_ativo(df: pd.DataFrame) -> dict:
     """
-    Avalia o ativo com placar de 0 a 10 para COMPRA e para VENDA.
-
-    IMPORTANTE — lógica sensível ao regime de tendência: RSI/Estocástico
-    esticados e toque em resistência/suporte NÃO significam sempre reversão.
-    - Em TENDÊNCIA DE ALTA: RSI/Estocástico esticados = confirmação de força
-      (momentum), não topo. Rompimento de resistência com volume = compra
-      (breakout), não venda. Recuo do RSI/Estocástico = pullback saudável,
-      possível ponto de compra.
-    - Em TENDÊNCIA DE BAIXA: espelha o raciocínio acima pro lado vendedor.
-    - Em MERCADO LATERAL (sem tendência definida): vale a lógica clássica
-      de reversão à média (sobrecompra perto da resistência = venda,
-      sobrevenda perto do suporte = compra).
+    Avalia o ativo com placar de 0 a 10 usando pesos profissionais de Swing Trade.
+    Distribuição: Tendência (4 pts) + Momentum/Gatilho (4 pts) + Volume/Contexto (2 pts).
     """
     ultimo = df.iloc[-1]
     penultimo = df.iloc[-2] if len(df) > 1 else ultimo
@@ -516,163 +475,94 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
     pontos_compra, pontos_venda = 0, 0
     motivos_compra, motivos_venda = [], []
 
-    # --- 1. Regime de tendência (médias móveis) — até 2 pontos ---
-    em_forte_alta = ultimo["close"] > ultimo["sma21"] > ultimo["sma50"] > ultimo["sma200"]
-    em_alta = em_forte_alta or (ultimo["close"] > ultimo["sma21"] > ultimo["sma50"])
-    em_forte_baixa = ultimo["close"] < ultimo["sma21"] < ultimo["sma50"] < ultimo["sma200"]
-    em_baixa = em_forte_baixa or (ultimo["close"] < ultimo["sma21"] < ultimo["sma50"])
+    # --- 1. TENDÊNCIA E ALINHAMENTO (Até 4 pontos) ---
+    tendencia_alta_media = ultimo["sma21"] > ultimo["sma50"]
+    tendencia_baixa_media = ultimo["sma21"] < ultimo["sma50"]
 
-    if em_forte_alta:
+    if tendencia_alta_media:
         pontos_compra += 2
-        motivos_compra.append("Tendência de alta confirmada nas médias de curto, médio e longo prazo")
-    elif em_alta:
-        pontos_compra += 1
-        motivos_compra.append("Tendência de alta no curto/médio prazo")
-    elif em_forte_baixa:
+        motivos_compra.append("Tendência de alta primária (SMA21 > SMA50)")
+        if ultimo["close"] > ultimo["sma21"]:
+            pontos_compra += 1
+            motivos_compra.append("Preço trabalhando acima da SMA21")
+        if ultimo["sma9"] > ultimo["sma21"]:
+            pontos_compra += 1
+            motivos_compra.append("Alinhamento direcional de curto prazo (SMA9 > SMA21)")
+            
+    elif tendencia_baixa_media:
         pontos_venda += 2
-        motivos_venda.append("Tendência de baixa confirmada nas médias de curto, médio e longo prazo")
-    elif em_baixa:
-        pontos_venda += 1
-        motivos_venda.append("Tendência de baixa no curto/médio prazo")
+        motivos_venda.append("Tendência de baixa primária (SMA21 < SMA50)")
+        if ultimo["close"] < ultimo["sma21"]:
+            pontos_venda += 1
+            motivos_venda.append("Preço trabalhando abaixo da SMA21")
+        if ultimo["sma9"] < ultimo["sma21"]:
+            pontos_venda += 1
+            motivos_venda.append("Alinhamento direcional de curto prazo (SMA9 < SMA21)")
 
-    # --- 2. RSI — interpretação depende do regime de tendência ---
+    # --- 2. GATILHOS DE MOMENTUM: MACD E RSI (Até 4 pontos) ---
+    # MACD (2 pontos diretos)
+    if ultimo["macd"] > ultimo["macd_sinal"]:
+        pontos_compra += 2
+        motivos_compra.append("MACD comprador (linha MACD acima do Sinal)")
+    elif ultimo["macd"] < ultimo["macd_sinal"]:
+        pontos_venda += 2
+        motivos_venda.append("MACD vendedor (linha MACD abaixo do Sinal)")
+
+    # RSI (2 pontos) - Valorizamos zonas saudáveis (45 a 65) e de recuo (perto de 40)
     rsi = ultimo["rsi"]
-    if em_alta:
-        if rsi > 70:
-            pontos_compra += 2
-            motivos_compra.append(f"RSI em {rsi:.0f} — momentum forte dentro da tendência de alta (não é sinal de topo)")
-        elif rsi < 40:
-            pts = 2 if rsi < 30 else 1
-            pontos_compra += pts
-            motivos_compra.append(f"RSI em {rsi:.0f} — recuo dentro da tendência de alta (possível ponto de compra)")
-    elif em_baixa:
-        if rsi < 30:
-            pontos_venda += 2
-            motivos_venda.append(f"RSI em {rsi:.0f} — momentum forte dentro da tendência de baixa (não é sinal de fundo)")
-        elif rsi > 60:
-            pts = 2 if rsi > 70 else 1
-            pontos_venda += pts
-            motivos_venda.append(f"RSI em {rsi:.0f} — repique dentro da tendência de baixa (possível ponto de venda)")
-    else:  # mercado lateral -> reversão à média clássica
-        if rsi < 30:
-            pontos_compra += 2
-            motivos_compra.append(f"RSI em {rsi:.0f} — sobrevenda em mercado lateral")
-        elif rsi < 40:
-            pontos_compra += 1
-            motivos_compra.append(f"RSI em {rsi:.0f} — zona de sobrevenda")
-        elif rsi > 70:
-            pontos_venda += 2
-            motivos_venda.append(f"RSI em {rsi:.0f} — sobrecompra em mercado lateral")
-        elif rsi > 60:
-            pontos_venda += 1
-            motivos_venda.append(f"RSI em {rsi:.0f} — zona de sobrecompra")
+    if 40 <= rsi <= 68:
+        pontos_compra += 2
+        motivos_compra.append(f"RSI em {rsi:.0f} — Momentum saudável, espaço para alta")
+    elif rsi > 68:
+        pontos_compra += 1
+        motivos_compra.append(f"RSI em {rsi:.0f} — Tendência forte, mas próximo de sobrecompra")
 
-    # --- 3. MACD — momentum direcional puro, não depende do regime ---
-    atr_atual = ultimo["atr"] if pd.notna(ultimo["atr"]) else 0
-    diff_macd = ultimo["macd"] - ultimo["macd_sinal"]
-    zona_morta_macd = 0.05 * atr_atual if atr_atual > 0 else 0
-    hist_cresceu = ultimo["macd_hist"] > penultimo["macd_hist"]
+    if 32 <= rsi <= 60:
+        pontos_venda += 2
+        motivos_venda.append(f"RSI em {rsi:.0f} — Momentum saudável, espaço para queda")
+    elif rsi < 32:
+        pontos_venda += 1
+        motivos_venda.append(f"RSI em {rsi:.0f} — Tendência forte, mas próximo de sobrevenda")
 
-    if abs(diff_macd) < zona_morta_macd:
-        pass
-    elif diff_macd > 0:
-        pts = 2 if hist_cresceu else 1
-        pontos_compra += pts
-        extra = " e ganhando força" if hist_cresceu else ""
-        motivos_compra.append(f"MACD acima da linha de sinal (momentum comprador{extra})")
-    else:
-        pts = 2 if not hist_cresceu else 1
-        pontos_venda += pts
-        extra = " e perdendo força" if not hist_cresceu else ""
-        motivos_venda.append(f"MACD abaixo da linha de sinal (momentum vendedor{extra})")
-
-    # --- 4. Estocástico — mesma lógica condicional do RSI ---
-    stoch = ultimo["stoch_k"]
-    if em_alta:
-        if stoch > 80:
-            pontos_compra += 2
-            motivos_compra.append(f"Estocástico em {stoch:.0f} — momentum forte, compatível com tendência de alta")
-        elif stoch < 35:
-            pts = 2 if stoch < 20 else 1
-            pontos_compra += pts
-            motivos_compra.append(f"Estocástico em {stoch:.0f} — recuo dentro da tendência de alta")
-    elif em_baixa:
-        if stoch < 20:
-            pontos_venda += 2
-            motivos_venda.append(f"Estocástico em {stoch:.0f} — momentum forte, compatível com tendência de baixa")
-        elif stoch > 65:
-            pts = 2 if stoch > 80 else 1
-            pontos_venda += pts
-            motivos_venda.append(f"Estocástico em {stoch:.0f} — repique dentro da tendência de baixa")
-    else:
-        if stoch < 20:
-            pontos_compra += 2
-            motivos_compra.append(f"Estocástico em {stoch:.0f} — sobrevenda extrema em mercado lateral")
-        elif stoch < 35:
-            pontos_compra += 1
-            motivos_compra.append(f"Estocástico em {stoch:.0f} — sobrevenda")
-        elif stoch > 80:
-            pontos_venda += 2
-            motivos_venda.append(f"Estocástico em {stoch:.0f} — sobrecompra extrema em mercado lateral")
-        elif stoch > 65:
-            pontos_venda += 1
-            motivos_venda.append(f"Estocástico em {stoch:.0f} — sobrecompra")
-
-    # --- 5. Suporte/Resistência — distingue ROMPIMENTO de simples TOQUE ---
-    resistencia_anterior = penultimo["resistencia"]
-    suporte_anterior = penultimo["suporte"]
+    # --- 3. VOLUME E CONTEXTO DE PREÇO (Até 2 pontos) ---
+    # Volume (1 ponto)
     media_volume = df["volume"].rolling(20).mean().iloc[-1]
-    volume_alto = ultimo["volume"] > media_volume
+    if ultimo["volume"] > media_volume:
+        pontos_compra += 1
+        pontos_venda += 1
+        motivos_compra.append("Volume financeiro acima da média de 20 dias")
+        motivos_venda.append("Volume financeiro acima da média de 20 dias")
 
-    rompeu_resistencia = ultimo["close"] > resistencia_anterior
-    rompeu_suporte = ultimo["close"] < suporte_anterior
-
+    # Contexto (1 ponto) - Onde o preço está no canal?
     faixa = ultimo["resistencia"] - ultimo["suporte"]
     if faixa > 0:
         dist_suporte = (ultimo["close"] - ultimo["suporte"]) / faixa
+        if dist_suporte > 0.8:
+            pontos_compra += 1
+            motivos_compra.append("Rompendo ou pressionando resistência recente")
+        elif 0.3 <= dist_suporte <= 0.6 and tendencia_alta_media:
+            pontos_compra += 1
+            motivos_compra.append("Pullback saudável: Preço em zona de valor e respiro")
+            
+        if dist_suporte < 0.2:
+            pontos_venda += 1
+            motivos_venda.append("Perdendo ou pressionando suporte recente")
+        elif 0.4 <= dist_suporte <= 0.7 and tendencia_baixa_media:
+            pontos_venda += 1
+            motivos_venda.append("Repique saudável: Preço em zona de valor para venda")
 
-        if dist_suporte > 0.85:
-            if em_alta:
-                if rompeu_resistencia:
-                    pts = 2 if volume_alto else 1
-                    extra = " com volume acima da média (rompimento confirmado)" if volume_alto else ""
-                    motivos_compra.append(f"Rompendo a máxima recente{extra}")
-                else:
-                    pts = 1
-                    motivos_compra.append("Sustentando perto da máxima recente dentro da tendência de alta")
-                pontos_compra += pts
-            else:
-                pts = 2 if volume_alto else 1
-                pontos_venda += pts
-                extra = " com volume acima da média" if volume_alto else ""
-                motivos_venda.append(f"Preço testando resistência sem tendência de alta confirmada{extra} — risco de rejeição")
-        elif dist_suporte < 0.15:
-            if em_baixa:
-                if rompeu_suporte:
-                    pts = 2 if volume_alto else 1
-                    extra = " com volume acima da média (rompimento confirmado)" if volume_alto else ""
-                    motivos_venda.append(f"Rompendo a mínima recente{extra}")
-                else:
-                    pts = 1
-                    motivos_venda.append("Sustentando perto da mínima recente dentro da tendência de baixa")
-                pontos_venda += pts
-            else:
-                pts = 2 if volume_alto else 1
-                pontos_compra += pts
-                extra = " com volume acima da média" if volume_alto else ""
-                motivos_compra.append(f"Preço testando suporte sem tendência de baixa confirmada{extra} — possível ponto de compra")
-
+    # --- CÁLCULO FINAL ---
     if pontos_compra == pontos_venda:
         direcao = "neutro"
         score = pontos_compra
-        motivos = (motivos_compra + motivos_venda) or ["Nenhum indicador com sinal relevante no momento"]
+        motivos = (motivos_compra + motivos_venda) or ["Nenhum indicador com sinal direcional forte"]
     elif pontos_compra > pontos_venda:
         direcao = "compra"
-        score = pontos_compra
+        score = min(10, pontos_compra)
         motivos = motivos_compra
     else:
         direcao = "venda"
-        score = pontos_venda
+        score = min(10, pontos_venda)
         motivos = motivos_venda
 
     return {
