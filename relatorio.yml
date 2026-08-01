@@ -1,0 +1,42 @@
+name: Relatorio Diario B3
+
+# Roda automaticamente em dias úteis às 12:30 UTC (09:30 no horário de Brasília)
+# e também permite rodar manualmente pelo botão "Run workflow" no GitHub.
+on:
+  schedule:
+    - cron: "37 12 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # necessário pra salvar o estado.json de volta no repositório
+
+jobs:
+  rodar-relatorio:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o código do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependências
+        run: pip install yfinance pandas numpy matplotlib feedparser requests
+
+      - name: Rodar relatório diário
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          OPLAB_TOKEN: ${{ secrets.OPLAB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python relatorio_diario.py
+
+      - name: Salvar histórico de alertas (estado.json)
+        run: |
+          git config user.name "robo-b3-bot"
+          git config user.email "actions@github.com"
+          git add estado.json
+          git diff --staged --quiet || git commit -m "Atualiza estado.json [skip ci]"
+          git push
