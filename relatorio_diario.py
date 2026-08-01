@@ -95,7 +95,7 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
     stop_alvo = sugerir_stop_alvo(df, direcao, atr_mult=atr_mult, risco_retorno=risco_retorno,
                                    risco_maximo_atr_mult=risco_maximo_atr_mult)
 
-    # --- Revisão com IA (opcional, só roda se ANTHROPIC_API_KEY estiver configurada) ---
+    # --- Revisão com IA (opcional, só roda se GEMINI_API_KEY estiver configurada) ---
     bloco_ia = ""
     if getattr(config, "USAR_IA_ANALISE", False) and getattr(config, "GEMINI_API_KEY", ""):
         resumo_tecnico = montar_resumo_tecnico(resultado, stop_alvo)
@@ -107,24 +107,46 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
 
         if ia.get("disponivel"):
             padrao = ia.get("padrao_grafico", "")
-            padrao_txt = f" | Padrão: <i>{padrao}</i>" if padrao and padrao != "sem padrão claro" else ""
+            qualidade = ia.get("qualidade_setup", "")
+            timing = ia.get("timing", "")
+            riscos = ia.get("riscos_identificados", [])
+            
+            # Monta blocos informativos
+            bloco_qualidade = f" | Qualidade: <b>{qualidade.upper()}</b>" if qualidade else ""
+            bloco_timing = ""
+            if timing == "agora":
+                bloco_timing = " | ⏰ Timing: <b>AGORA</b>"
+            elif timing == "esperar_pullback":
+                bloco_timing = " | ⏰ Timing: <i>esperar pullback</i>"
+            elif timing == "ja_passou":
+                bloco_timing = " | ⏰ Timing: <i>já passou</i>"
+            elif timing == "muito_cedo":
+                bloco_timing = " | ⏰ Timing: <i>muito cedo</i>"
+            
+            padrao_txt = f" | Padrão: <i>{padrao}</i>" if padrao and padrao != "sem padrão definido" else ""
+            
+            # Bloco de riscos (se houver)
+            bloco_riscos = ""
+            if riscos:
+                bloco_riscos = "\n  ⚠️ <b>Riscos identificados:</b> " + ", ".join(riscos[:2])
+            
             if ia["direcao"] != direcao and ia["direcao"] != "neutro":
                 return (
                     f"{cabecalho}\n{motivos_txt}\n"
-                    f"  🤖 <b>IA discorda do placar técnico{padrao_txt}</b>\n"
+                    f"  🤖 <b>IA discorda do placar técnico{bloco_qualidade}{bloco_timing}{padrao_txt}</b>\n"
                     f"  Leitura da IA: {ia['direcao'].upper()} (confiança {ia['confianca']}/10)\n"
-                    f"  {ia['analise']}\n"
+                    f"  {ia['analise']}{bloco_riscos}\n"
                     f"  ⚠️ Plano de entrada NÃO enviado — conflito entre placar e IA. Avalie o gráfico manualmente."
                 )
             elif ia["direcao"] == "neutro":
                 bloco_ia = (
-                    f"\n  🤖 <b>IA sem convicção{padrao_txt}</b> (confiança {ia['confianca']}/10)\n"
-                    f"  {ia['analise']}\n  Prossiga com cautela extra."
+                    f"\n  🤖 <b>IA sem convicção{bloco_qualidade}{bloco_timing}{padrao_txt}</b> (confiança {ia['confianca']}/10)\n"
+                    f"  {ia['analise']}{bloco_riscos}\n  Prossiga com cautela extra."
                 )
             else:
                 bloco_ia = (
-                    f"\n  🤖 <b>IA confirma{padrao_txt}</b> (confiança {ia['confianca']}/10)\n"
-                    f"  {ia['analise']}"
+                    f"\n  🤖 <b>IA confirma{bloco_qualidade}{bloco_timing}{padrao_txt}</b> (confiança {ia['confianca']}/10)\n"
+                    f"  {ia['analise']}{bloco_riscos}"
                 )
         else:
             bloco_ia = f"\n  🤖 <i>IA indisponível: {ia.get('motivo', 'erro desconhecido')} — usando só o placar técnico.</i>"
