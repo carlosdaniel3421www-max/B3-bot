@@ -5,7 +5,7 @@
     "data_primeiro_alerta": "2026-07-29"
   },
   "BBAS3": {
-    "score": 6,
+    "score": 7,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-07-30"
   },
@@ -25,8 +25,13 @@
     "data_primeiro_alerta": "2026-07-31"
   },
   "USIM5": {
-    "score": 6,
+    "score": 7,
     "direcao": "venda",
     "data_primeiro_alerta": "2026-07-31"
+  },
+  "CMIG4": {
+    "score": 6,
+    "direcao": "compra",
+    "data_primeiro_alerta": "2026-08-01"
   }
 }
