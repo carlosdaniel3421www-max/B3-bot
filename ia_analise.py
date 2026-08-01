@@ -1,7 +1,17 @@
 """
 Análise com IA visual (Google Gemini) — manda a IMAGEM do gráfico gerado
 pelo robô pra IA analisar como um trader de verdade faria, olhando o
-desenho do gráfico, não só números.
+desenho do gráfico, não só números. Capta padrões visuais (bandeiras,
+triângulos, divergências, candles de reversão, rompimentos) que um sistema
+de regras baseado em números nunca consegue ver.
+
+PLANO GRATUITO DO GEMINI (sem prazo de validade, sem cartão de crédito):
+  - Até 1.500 chamadas por dia
+  - Até 15 chamadas por minuto
+  - Mais que suficiente pro nosso uso (máx ~6 chamadas por relatório)
+  - Pegue sua chave GRÁTIS em: aistudio.google.com → Get API Key
+
+Configure em config.py -> GEMINI_API_KEY (ou variável de ambiente).
 """
 
 import base64
@@ -9,10 +19,9 @@ import json
 import requests
 
 
-# Usando gemini-1.5-flash (modelo padrão altamente estável para visão computacional)
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
-    "gemini-1.5-flash:generateContent"
+    "gemini-2.0-flash:generateContent"
 )
 
 PROMPT_SISTEMA = """Você é um trader profissional de swing trade com décadas de
@@ -71,12 +80,16 @@ def analisar_com_ia(resumo_tecnico: str, api_key: str,
                      caminho_imagem: str = None, **kwargs) -> dict:
     """
     Manda a imagem do gráfico + resumo textual pro Gemini analisar.
+    Retorna dict com: disponivel, direcao, confianca, padrao_grafico, analise,
+    concorda_com_placar. Se falhar por qualquer motivo, retorna disponivel=False
+    e o chamador cai de volta pro placar técnico puro.
     """
     if not api_key:
         return {"disponivel": False, "motivo": "Sem chave de API do Gemini configurada"}
 
     partes = []
 
+    # Inclui a imagem do gráfico (o principal)
     if caminho_imagem:
         try:
             with open(caminho_imagem, "rb") as f:
@@ -89,6 +102,7 @@ def analisar_com_ia(resumo_tecnico: str, api_key: str,
     else:
         return {"disponivel": False, "motivo": "Imagem do gráfico não encontrada"}
 
+    # Inclui o resumo textual como contexto adicional
     partes.append({
         "text": f"{PROMPT_SISTEMA}\n\nDados do sistema de regras:\n{resumo_tecnico}"
     })
@@ -101,7 +115,7 @@ def analisar_com_ia(resumo_tecnico: str, api_key: str,
             json={
                 "contents": [{"parts": partes}],
                 "generationConfig": {
-                    "temperature": 0.2,
+                    "temperature": 0.2,      # baixa pra respostas mais consistentes
                     "maxOutputTokens": 600,
                     "responseMimeType": "application/json",
                 }
@@ -111,8 +125,10 @@ def analisar_com_ia(resumo_tecnico: str, api_key: str,
         resposta.raise_for_status()
         dados = resposta.json()
 
+        # Extrai o texto da resposta do Gemini
         texto = dados["candidates"][0]["content"]["parts"][0]["text"].strip()
 
+        # Remove blocos markdown se o Gemini colocar mesmo pedindo JSON direto
         if "```" in texto:
             texto = texto.split("```")[1]
             if texto.startswith("json"):
