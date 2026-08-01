@@ -14,6 +14,12 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "COLOQUE_SEU_CHAT_ID_AQUI"
 # --- OpLab (opcional, para cadeia de opções real) ---
 OPLAB_TOKEN = os.environ.get("OPLAB_TOKEN", "")  # deixe vazio se não tiver
 
+# --- IA visual (Google Gemini) para revisar os sinais olhando o gráfico ---
+# Plano GRATUITO (sem prazo de validade): aistudio.google.com -> Get API Key
+# Sem chave configurada, o robô usa só o placar técnico (não quebra nada).
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+USAR_IA_ANALISE = True
+
 # --- Screener ---
 # Ativos que você opera.
 WATCHLIST = [
