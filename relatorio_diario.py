@@ -191,6 +191,7 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
             chart_path=caminho_imagem
         )
 
+        print("DEBUG IA:", ia)
 
         if ia:
 
