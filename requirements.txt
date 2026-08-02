@@ -1,7 +1,5 @@
 pyTelegramBotAPI
 google-generativeai
 pandas
-pandas-ta
-requests
 numpy
-yfinance
+requests
