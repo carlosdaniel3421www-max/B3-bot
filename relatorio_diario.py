@@ -32,7 +32,7 @@ from opcoes import sugerir_parametros_opcao
 from calendario import checar_resultado_proximo
 from gestao_risco import calcular_tamanho_posicao
 from estado import carregar_estado, salvar_estado, eh_alerta_novo, atualizar_estado
-from ia_analise import montar_resumo_tecnico, analisar_com_ia
+from ai_analyzer import AIAnalyzer
 from b3_swing_analyzer import sugerir_stop_alvo, plotar_grafico
 from telegram_utils import enviar_mensagem, enviar_album
 
