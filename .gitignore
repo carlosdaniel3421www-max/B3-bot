@@ -1,3 +1,1 @@
-(relatorio_diario.py and relatorio_tarde.py are Python source files, which should not be added to .gitignore)
-
-# No changes needed - only Python source files were modified
+(config.py is a source file, and there are no build artifacts, dependencies, or temp files in the changes - only modified source/config files)
