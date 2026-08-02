@@ -1,5 +1,4 @@
 import pandas as pd
-import pandas_ta as ta  # <-- Use esta biblioteca pura em Python
 import numpy as np
 import yfinance as yf
 # ... resto do código
