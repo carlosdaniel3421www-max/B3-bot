@@ -1,4 +1,3 @@
-import telebot
 import config
 from b3_swing_analyzer import analisar_ativo
 from ia_analise import analisar_com_ia
