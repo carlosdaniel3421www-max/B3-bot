@@ -42,13 +42,12 @@ PASTA_GRAFICOS = "graficos_tmp"
 def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
                          atr_mult: float = 1.5, risco_retorno: float = 2.0,
                          risco_maximo_atr_mult: float = 3.0, margem_saida_estado: int = 2,
-                         caminho_imagem: str = None) -> str:
+                         caminho_imagem: str = None):
     """
     Monta o bloco de texto para UM ativo no resumo final.
-    - Direção "neutro" (sinais empatados/conflitantes): só mostra o placar, nunca plano completo.
-    - Nível < nivel_detalhe: só mostra placar e motivos.
-    - Nível >= nivel_detalhe e já alertado antes (mesma direção): versão curta.
-    - Nível >= nivel_detalhe e é alerta NOVO: plano completo.
+    Retorna uma TUPLA: (bloco_principal, bloco_ia_separado)
+    
+    O bloco da IA é retornado separadamente pra ser enviado como mensagem própria.
     """
     ticker = resultado["ticker"]
     score = resultado["score"]
@@ -64,41 +63,10 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
     cabecalho = f"{emoji} <b>{ticker} — {score}/10 ({palavra})</b>"
     motivos_txt = "\n".join(f"  • {m}" for m in resultado["motivos"])
 
-    if direcao == "neutro" or score < nivel_detalhe:
-        return f"{cabecalho}\n{motivos_txt}"
-
-    if not eh_alerta_novo(estado, ticker, score, direcao, nivel_detalhe):
-        data_alerta = estado.get(ticker, {}).get("data_primeiro_alerta", "?")
-        return f"{cabecalho}\n{motivos_txt}\n  ↻ Sinal mantido desde {data_alerta} — plano já enviado, sem novidade."
-
-    # --- A partir daqui: é um alerta NOVO, monta o plano completo ---
-    nome_empresa = config.NOME_EMPRESA.get(ticker, ticker)
-    risco_noticias = checar_risco_noticias(nome_empresa)
-
-    if risco_noticias["bloquear_entrada"]:
-        motivo_bloqueio = risco_noticias["alertas"][0]["motivo"]
-        return (
-            f"{cabecalho}\n{motivos_txt}\n"
-            f"  🚫 <b>Plano de entrada CANCELADO</b> — notícia de risco encontrada: {motivo_bloqueio}"
-        )
-
-    resultado_trimestral = checar_resultado_proximo(ticker, config.DIAS_MINIMOS_ANTES_RESULTADO)
-    if resultado_trimestral["tem_resultado_proximo"]:
-        return (
-            f"{cabecalho}\n{motivos_txt}\n"
-            f"  🚫 <b>Plano de entrada CANCELADO</b> — resultado trimestral em "
-            f"{resultado_trimestral['dias_ate_resultado']} dia(s) ({resultado_trimestral['data_resultado']}). "
-            f"Volatilidade imprevisível na véspera/pós-balanço."
-        )
-
-    df = resultado["df"]
-    stop_alvo = sugerir_stop_alvo(df, direcao, atr_mult=atr_mult, risco_retorno=risco_retorno,
-                                   risco_maximo_atr_mult=risco_maximo_atr_mult)
-
-    # --- Revisão com IA (opcional, só roda se GEMINI_API_KEY estiver configurada) ---
-    bloco_ia = ""
+    # --- Análise da IA (roda pra TODOS os ativos se estiver habilitada) ---
+    bloco_ia_separado = ""
     if getattr(config, "USAR_IA_ANALISE", False) and getattr(config, "GEMINI_API_KEY", ""):
-        resumo_tecnico = montar_resumo_tecnico(resultado, stop_alvo)
+        resumo_tecnico = montar_resumo_tecnico(resultado, None)
         ia = analisar_com_ia(
             resumo_tecnico,
             config.GEMINI_API_KEY,
@@ -110,6 +78,9 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
             qualidade = ia.get("qualidade_setup", "")
             timing = ia.get("timing", "")
             riscos = ia.get("riscos_identificados", [])
+            confianca = ia.get("confianca", 0)
+            direcao_ia = ia.get("direcao", "neutro")
+            analise = ia.get("analise", "")
             
             # Monta blocos informativos
             bloco_qualidade = f" | Qualidade: <b>{qualidade.upper()}</b>" if qualidade else ""
@@ -123,33 +94,57 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
             elif timing == "muito_cedo":
                 bloco_timing = " | ⏰ Timing: <i>muito cedo</i>"
             
-            padrao_txt = f" | Padrão: <i>{padrao}</i>" if padrao and padrao != "sem padrão definido" else ""
-            
             # Bloco de riscos (se houver)
             bloco_riscos = ""
             if riscos:
-                bloco_riscos = "\n  ⚠️ <b>Riscos identificados:</b> " + ", ".join(riscos[:2])
+                bloco_riscos = "\n⚠️ Riscos: " + ", ".join(riscos[:2])
             
-            if ia["direcao"] != direcao and ia["direcao"] != "neutro":
-                return (
-                    f"{cabecalho}\n{motivos_txt}\n"
-                    f"  🤖 <b>IA discorda do placar técnico{bloco_qualidade}{bloco_timing}{padrao_txt}</b>\n"
-                    f"  Leitura da IA: {ia['direcao'].upper()} (confiança {ia['confianca']}/10)\n"
-                    f"  {ia['analise']}{bloco_riscos}\n"
-                    f"  ⚠️ Plano de entrada NÃO enviado — conflito entre placar e IA. Avalie o gráfico manualmente."
-                )
-            elif ia["direcao"] == "neutro":
-                bloco_ia = (
-                    f"\n  🤖 <b>IA sem convicção{bloco_qualidade}{bloco_timing}{padrao_txt}</b> (confiança {ia['confianca']}/10)\n"
-                    f"  {ia['analise']}{bloco_riscos}\n  Prossiga com cautela extra."
-                )
+            # Formata direção da IA em português
+            if direcao_ia == "compra":
+                direcao_txt = "COMPRA"
+            elif direcao_ia == "venda":
+                direcao_txt = "VENDA"
             else:
-                bloco_ia = (
-                    f"\n  🤖 <b>IA confirma{bloco_qualidade}{bloco_timing}{padrao_txt}</b> (confiança {ia['confianca']}/10)\n"
-                    f"  {ia['analise']}{bloco_riscos}"
-                )
-        else:
-            bloco_ia = f"\n  🤖 <i>IA indisponível: {ia.get('motivo', 'erro desconhecido')} — usando só o placar técnico.</i>"
+                direcao_txt = "NEUTRO"
+            
+            # MENSAGEM SEPARADA DA IA - formato solicitado
+            bloco_ia_separado = (
+                f"🤖 <b>IA - {ticker}</b>\n"
+                f"Direção: <b>{direcao_txt}</b> (confiança {confianca}/10){bloco_qualidade}{bloco_timing}\n"
+                f"Padrão identificado: {padrao if padrao else 'Nenhum padrão específico'}\n\n"
+                f"📌 <b>Análise:</b> {analise}{bloco_riscos}"
+            )
+
+    if direcao == "neutro" or score < nivel_detalhe:
+        return f"{cabecalho}\n{motivos_txt}", bloco_ia_separado
+
+    if not eh_alerta_novo(estado, ticker, score, direcao, nivel_detalhe):
+        data_alerta = estado.get(ticker, {}).get("data_primeiro_alerta", "?")
+        return f"{cabecalho}\n{motivos_txt}\n  ↻ Sinal mantido desde {data_alerta} — plano já enviado, sem novidade.", bloco_ia_separado
+
+    # --- A partir daqui: é um alerta NOVO, monta o plano completo ---
+    nome_empresa = config.NOME_EMPRESA.get(ticker, ticker)
+    risco_noticias = checar_risco_noticias(nome_empresa)
+
+    if risco_noticias["bloquear_entrada"]:
+        motivo_bloqueio = risco_noticias["alertas"][0]["motivo"]
+        return (
+            f"{cabecalho}\n{motivos_txt}\n"
+            f"  🚫 <b>Plano de entrada CANCELADO</b> — notícia de risco encontrada: {motivo_bloqueio}"
+        ), bloco_ia_separado
+
+    resultado_trimestral = checar_resultado_proximo(ticker, config.DIAS_MINIMOS_ANTES_RESULTADO)
+    if resultado_trimestral["tem_resultado_proximo"]:
+        return (
+            f"{cabecalho}\n{motivos_txt}\n"
+            f"  🚫 <b>Plano de entrada CANCELADO</b> — resultado trimestral em "
+            f"{resultado_trimestral['dias_ate_resultado']} dia(s) ({resultado_trimestral['data_resultado']}). "
+            f"Volatilidade imprevisível na véspera/pós-balanço."
+        ), bloco_ia_separado
+
+    df = resultado["df"]
+    stop_alvo = sugerir_stop_alvo(df, direcao, atr_mult=atr_mult, risco_retorno=risco_retorno,
+                                   risco_maximo_atr_mult=risco_maximo_atr_mult)
 
     opcao = sugerir_parametros_opcao(resultado["preco"], direcao)
     posicao = calcular_tamanho_posicao(config.CAPITAL_DISPONIVEL, config.RISCO_POR_OPERACAO_PCT,
@@ -183,13 +178,12 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
         f"R$ {opcao['strike_sugerido_aprox']}, vencimento {opcao['vencimento_sugerido']} "
         f"— {explicacao_opcao}.\n"
         f"  ⚠️ Confira a liquidez dessa opção no seu home broker antes de operar."
-        f"{bloco_ia}"
     )
 
     if risco_noticias["positivas"]:
         plano += f"\n  ✅ Notícia recente favorável: {risco_noticias['positivas'][0]['titulo']}"
 
-    return plano
+    return plano, bloco_ia_separado
 
 
 def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
@@ -232,13 +226,17 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
 
     print("Checando notícias/calendário e montando resumo...")
     blocos = []
+    blocos_ia = []  # Lista separada pra mensagens da IA
     for r in resultados:
         caminho = os.path.join(PASTA_GRAFICOS, f"{r['ticker']}_{arquivo_estado.replace('.json','')}.png")
-        blocos.append(montar_bloco_resumo(r, estado, nivel_detalhe, atr_mult=atr_mult,
+        bloco_principal, bloco_ia = montar_bloco_resumo(r, estado, nivel_detalhe, atr_mult=atr_mult,
                                            risco_retorno=risco_retorno,
                                            risco_maximo_atr_mult=risco_maximo_atr_mult,
                                            margem_saida_estado=margem_saida_estado,
-                                           caminho_imagem=caminho))
+                                           caminho_imagem=caminho)
+        blocos.append(bloco_principal)
+        if bloco_ia:  # Se tiver análise da IA, guarda pra enviar depois
+            blocos_ia.append(bloco_ia)
         estado = atualizar_estado(estado, r["ticker"], r["score"], r["direcao"], nivel_detalhe,
                                    margem_saida=margem_saida_estado)
 
@@ -280,6 +278,13 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
             partes.append(atual)
         for parte in partes:
             enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, parte)
+
+    # Envia as análises da IA como mensagens separadas (uma por ativo)
+    if blocos_ia:
+        print(f"Enviando {len(blocos_ia)} análise(s) da IA...")
+        for bloco_ia in blocos_ia:
+            # Cada análise da IA vai como mensagem separada logo após o resumo principal
+            enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, bloco_ia)
 
     print(f"[{titulo}] Relatório enviado com sucesso.")
 
