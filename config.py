@@ -11,10 +11,10 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 # 🚨 FALLBACK DE EMERGÊNCIA: Cole seu token aqui entre as aspas se o Secret do GitHub falhar.
 # Exemplo: "123456789:AAFdB...xyz"
-TOKEN_FIXO_EMERGENCIA = "COLE_SEU_TOKEN_AQUI_SE_O_GITHUB_FALHAR"
+TOKEN_FIXO_EMERGENCIA = "8997172080:AAGkDhNR5KwSS_aYcwtdlZceA3gubaf0YuA"
 
 # Lógica de prioridade: Usa o fixo se a variável de ambiente estiver vazia
-if not TELEGRAM_TOKEN and TOKEN_FIXO_EMERGENCIA != "COLE_SEU_TOKEN_AQUI_SE_O_GITHUB_FALHAR":
+if not TELEGRAM_TOKEN and TOKEN_FIXO_EMERGENCIA != "8997172080:AAGkDhNR5KwSS_aYcwtdlZceA3gubaf0YuA":
     TELEGRAM_TOKEN = TOKEN_FIXO_EMERGENCIA
 
 GEMINI_MODEL = "gemini-1.5-flash"
