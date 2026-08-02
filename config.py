@@ -3,83 +3,69 @@ import os
 # ==============================================================================
 # CONFIGURAÇÕES DO TELEGRAM
 # ==============================================================================
-# Obtenha em https://t.me/BotFather
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "SEU_TOKEN_DO_TELEGRAM_AQUI")
-
-# Obtenha em https://t.me/userinfobot (envie /start para ele)
+# O GitHub Actions usa as Secrets, então o os.environ.get vai pegar o valor de lá.
+# Se rodar localmente, use os valores padrão entre aspas para teste.
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", os.environ.get("TELEGRAM_TOKEN", "SEU_TOKEN_AQUI"))
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "SEU_CHAT_ID_AQUI")
 
 # ==============================================================================
 # CONFIGURAÇÕES DA IA (GOOGLE GEMINI)
 # ==============================================================================
-# 1. Crie uma chave gratuita em: https://aistudio.google.com/app/apikey
-# 2. No GitHub: Vá em Settings > Secrets and variables > Actions > New repository secret
-#    Nome: GEMINI_API_KEY
-#    Valor: (cole sua chave aqui)
-# 3. Para testes locais, cole a chave abaixo entre as aspas.
-
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "SUA_CHAVE_GEMINI_AQUI_SEM_ESPACOS")
-
-# Modelo da IA (gemini-1.5-flash é o mais rápido e estável)
+# A chave deve estar nas Secrets do GitHub com o nome GEMINI_API_KEY
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "SUA_CHAVE_GEMINI_AQUI")
 GEMINI_MODEL = "gemini-1.5-flash"
 
 # ==============================================================================
-# CONFIGURAÇÕES GERAIS DO ROBÔ
+# CONFIGURAÇÕES GERAIS E DE ANÁLISE TÉCNICA
 # ==============================================================================
-# Lista de ativos para monitorar
 WATCHLIST = [
-    "PETR4",
-    "VALE3",
-    "ITUB4",
-    "BBDC4",
-    "BBAS3",
-    "WEGE3",
-    "RENT3",
-    "LREN3",
-    "MGLU3",
-    "HAPV3"
+    "PETR4", "VALE3", "ITUB4", "BBDC4", "BBAS3", 
+    "WEGE3", "RENT3", "LREN3", "MGLU3", "HAPV3"
 ]
 
-# Configurações de Análise Técnica
-PERIODO_ANALISE = 60  # Dias históricos para calcular indicadores
-PERIODO_HISTORICO = 60  # Alias necessário para compatibilidade com relatorio_diario.py
+# Períodos para cálculo de indicadores
+PERIODO_ANALISE = 60       # Dias históricos para calcular indicadores (alias comum)
+PERIODO_HISTORICO = 60     # Variável exigida pelo relatorio_diario.py
+NIVEL_DETALHE = "COMPLETO" # Nível de detalhe do relatório (ex: BASICO, COMPLETO)
 
+# Configurações de Médias Móveis
 MEDIA_MOVEL_CURTA = 9
 MEDIA_MOVEL_LONGA = 21
 
-# Limites de Score para disparo de alertas
+# Limites de Score para alertas
 SCORE_MINIMO_COMPRA = 6.0
 SCORE_MINIMO_VENDA = 6.0
 
 # ==============================================================================
-# VALIDAÇÃO INICIAL (DEBUG)
+# VALIDAÇÃO DE CONFIGURAÇÃO (DEBUG)
 # ==============================================================================
 def verificar_configuracoes():
-    """Verifica se as configurações essenciais estão presentes."""
-    erros = []
+    """Imprime o status das configurações para debug."""
+    print("--- Verificando Configurações ---")
     
-    if TELEGRAM_BOT_TOKEN == "SEU_TOKEN_DO_TELEGRAM_AQUI":
-        erros.append("❌ Token do Telegram não configurado.")
-        
-    if TELEGRAM_CHAT_ID == "SEU_CHAT_ID_AQUI":
-        erros.append("❌ Chat ID do Telegram não configurado.")
-        
-    # Verificação rigorosa da chave da IA
-    if not GEMINI_API_KEY or GEMINI_API_KEY == "SUA_CHAVE_GEMINI_AQUI_SEM_ESPACOS":
-        erros.append("❌ Chave da API do Gemini (GEMINI_API_KEY) não configurada ou inválida.")
-        erros.append("   -> Configure no GitHub Secrets ou edite este arquivo localmente.")
+    if "SEU_TOKEN" in str(TELEGRAM_BOT_TOKEN):
+        print("⚠️ Aviso: Token do Telegram parece ser o padrão.")
     else:
-        print(f"✅ Chave da IA detectada (iniciada com: {GEMINI_API_KEY[:5]}...)")
+        print("✅ Token do Telegram configurado.")
+        
+    if "SUA_CHAVE" in str(GEMINI_API_KEY) or not GEMINI_API_KEY:
+        print("⚠️ Aviso: Chave da IA (Gemini) não configurada ou inválida. A análise de IA falhará.")
+    else:
+        print("✅ Chave da IA configurada.")
 
-    if erros:
-        print("\n⚠️  ATENÇÃO: Configurações pendentes:")
-        for erro in erros:
-            print(erro)
-        return False
-    
-    print("\n✅ Todas as configurações validadas com sucesso!")
-    return True
+    # Verifica variáveis críticas que causaram erro antes
+    if 'PERIODO_HISTORICO' not in globals():
+        print("❌ Erro Crítico: PERIODO_HISTORICO não definida!")
+    else:
+        print(f"✅ PERIODO_HISTORICO: {PERIODO_HISTORICO}")
+        
+    if 'NIVEL_DETALHE' not in globals():
+        print("❌ Erro Crítico: NIVEL_DETALHE não definida!")
+    else:
+        print(f"✅ NIVEL_DETALHE: {NIVEL_DETALHE}")
+        
+    print("-----------------------------")
 
-# Executa a verificação ao importar o módulo (opcional, remove se causar ruído no log)
+# Executa verificação se rodado diretamente
 if __name__ == "__main__":
     verificar_configuracoes()
