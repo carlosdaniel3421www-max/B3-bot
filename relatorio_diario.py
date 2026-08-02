@@ -3,23 +3,12 @@ Relatório Diário — orquestra tudo:
   1. Roda o screener na watchlist, avaliando cada ativo de 0 a 10
   2. Manda TODOS os gráficos juntos, num álbum só
   3. Manda um resumo em texto, ranqueado do nível mais alto pro mais baixo
-  4. Para os ativos com nível alto (>= nivel_detalhe) que sejam alerta NOVO
-     (não repete o mesmo plano todo dia — veja estado.py):
-       - Checa notícias de risco
-       - Checa calendário de resultados (evita véspera de balanço)
-       - Calcula stop/alvo (ATR + suporte/resistência, com teto de risco)
-       - Calcula tamanho de posição sugerido (gestão de risco)
-       - Sugere parâmetros de opção (strike/vencimento)
-
-A lógica principal (gerar_e_enviar_relatorio) é parametrizável, pra poder
-ser reaproveitada por outros relatórios (ex: relatorio_tarde.py, com
-watchlist, prazo e motor de indicadores diferentes) sem duplicar código.
-
-USO (relatório da manhã, padrão):
-    python relatorio_diario.py
-
-Agende isso pra rodar todo dia de manhã usando GitHub Actions (veja o
-README), cron (Linux/Mac) ou o Agendador de Tarefas (Windows).
+  4. Para os ativos com nível alto (>= nivel_detalhe) que sejam alerta NOVO:
+       - Checa notícias de risco + calendário de resultados
+       - Calcula stop/alvo + tamanho de posição + opção sugerida
+  5. APÓS TUDO: IA analisa os melhores ativos visualmente (gráfico) e manda
+     uma mensagem separada com "por que entrar" e "por que NÃO entrar" —
+     roda sempre, não depende de estado ou filtros de score.
 """
 
 import os
@@ -32,24 +21,19 @@ from opcoes import sugerir_parametros_opcao
 from calendario import checar_resultado_proximo
 from gestao_risco import calcular_tamanho_posicao
 from estado import carregar_estado, salvar_estado, eh_alerta_novo, atualizar_estado
-from ai_analyzer import AIAnalyzer
+from ia_analise import analisar_ativo_visualmente, formatar_analise_ia
 from b3_swing_analyzer import sugerir_stop_alvo, plotar_grafico
 from telegram_utils import enviar_mensagem, enviar_album
 
 PASTA_GRAFICOS = "graficos_tmp"
+SCORE_MINIMO_IA = 4  # IA analisa todos os ativos com score >= esse valor
 
 
 def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
                          atr_mult: float = 1.5, risco_retorno: float = 2.0,
-                         risco_maximo_atr_mult: float = 3.0, margem_saida_estado: int = 2,
+                         risco_maximo_atr_mult: float = 3.0,
+                         margem_saida_estado: int = 2,
                          caminho_imagem: str = None) -> str:
-    """
-    Monta o bloco de texto para UM ativo no resumo final.
-    - Direção "neutro" (sinais empatados/conflitantes): só mostra o placar, nunca plano completo.
-    - Nível < nivel_detalhe: só mostra placar e motivos.
-    - Nível >= nivel_detalhe e já alertado antes (mesma direção): versão curta.
-    - Nível >= nivel_detalhe e é alerta NOVO: plano completo.
-    """
     ticker = resultado["ticker"]
     score = resultado["score"]
     direcao = resultado["direcao"]
@@ -69,202 +53,118 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
 
     if not eh_alerta_novo(estado, ticker, score, direcao, nivel_detalhe):
         data_alerta = estado.get(ticker, {}).get("data_primeiro_alerta", "?")
-        return f"{cabecalho}\n{motivos_txt}\n  ↻ Sinal mantido desde {data_alerta} — plano já enviado, sem novidade."
+        return f"{cabecalho}\n{motivos_txt}\n  ↻ Sinal mantido desde {data_alerta} — plano já enviado."
 
-    # --- A partir daqui: é um alerta NOVO, monta o plano completo ---
+    # --- Alerta NOVO: checa notícias e calendário ---
     nome_empresa = config.NOME_EMPRESA.get(ticker, ticker)
     risco_noticias = checar_risco_noticias(nome_empresa)
 
     if risco_noticias["bloquear_entrada"]:
-        motivo_bloqueio = risco_noticias["alertas"][0]["motivo"]
+        motivo = risco_noticias["alertas"][0]["motivo"]
         return (
             f"{cabecalho}\n{motivos_txt}\n"
-            f"  🚫 <b>Plano de entrada CANCELADO</b> — notícia de risco encontrada: {motivo_bloqueio}"
+            f"  🚫 <b>CANCELADO</b> — notícia de risco: {motivo}"
         )
 
     resultado_trimestral = checar_resultado_proximo(ticker, config.DIAS_MINIMOS_ANTES_RESULTADO)
     if resultado_trimestral["tem_resultado_proximo"]:
         return (
             f"{cabecalho}\n{motivos_txt}\n"
-            f"  🚫 <b>Plano de entrada CANCELADO</b> — resultado trimestral em "
-            f"{resultado_trimestral['dias_ate_resultado']} dia(s) ({resultado_trimestral['data_resultado']}). "
-            f"Volatilidade imprevisível na véspera/pós-balanço."
+            f"  🚫 <b>CANCELADO</b> — resultado trimestral em "
+            f"{resultado_trimestral['dias_ate_resultado']} dia(s) ({resultado_trimestral['data_resultado']})"
         )
 
     df = resultado["df"]
-    stop_alvo = sugerir_stop_alvo(df, direcao, atr_mult=atr_mult, risco_retorno=risco_retorno,
+    stop_alvo = sugerir_stop_alvo(df, direcao, atr_mult=atr_mult,
+                                   risco_retorno=risco_retorno,
                                    risco_maximo_atr_mult=risco_maximo_atr_mult)
-
-    # --- Revisão com IA (opcional, só roda se ANTHROPIC_API_KEY estiver configurada) ---
-    # --- Análise complementar Gemini ---
-    bloco_ia = ""
-
-    if (
-        getattr(config, "USAR_IA_ANALISE", False)
-        and getattr(config, "GEMINI_API_KEY", "")
-    ):
-
-        ultimo = df.iloc[-1]
-
-        analisador = AIAnalyzer(
-            api_key=config.GEMINI_API_KEY,
-            model=getattr(
-                config,
-                "GEMINI_MODEL",
-                None
-            ),
-            timeout_seconds=getattr(
-                config,
-                "GEMINI_TIMEOUT_SECONDS",
-                45
-            ),
-            max_retries=getattr(
-                config,
-                "GEMINI_MAX_RETRIES",
-                3
-            ),
-        )
-
-        ia = analisador.analyze_asset(
-
-            ticker=ticker,
-
-            current_price=float(
-                resultado["preco_atual"]
-            ),
-
-            ema21=float(
-                df["close"]
-                .ewm(
-                    span=21,
-                    adjust=False
-                )
-                .mean()
-                .iloc[-1]
-            ),
-
-            ema200=float(
-                df["close"]
-                .ewm(
-                    span=200,
-                    adjust=False
-                )
-                .mean()
-                .iloc[-1]
-            ),
-
-            rsi=float(
-                ultimo["rsi"]
-            ),
-
-            macd=float(
-                ultimo["macd"]
-            ),
-
-            volume=float(
-                ultimo["volume"]
-            ),
-
-            atr=float(
-                ultimo["atr"]
-            ),
-
-            support=float(
-                ultimo["suporte"]
-            ),
-
-            resistance=float(
-                ultimo["resistencia"]
-            ),
-
-            score=score,
-
-            direction=direcao,
-
-            reasons=resultado["motivos"],
-
-            news=risco_noticias.get(
-                "noticias",
-                []
-            ),
-
-            chart_path=caminho_imagem
-        )
-
-        print("TESTE IA =", ia)
-
-        if ia:
-
-            bloco_ia = (
-                "\n\n"
-                +
-                analisador.format_telegram_message(
-                    ia
-                )
-            )
-        if ia.get("disponivel"):
-            padrao = ia.get("padrao_grafico", "")
-            padrao_txt = f" | Padrão: <i>{padrao}</i>" if padrao and padrao != "sem padrão claro" else ""
-            if ia["direcao"] != direcao and ia["direcao"] != "neutro":
-                return (
-                    f"{cabecalho}\n{motivos_txt}\n"
-                    f"  🤖 <b>IA discorda do placar técnico{padrao_txt}</b>\n"
-                    f"  Leitura da IA: {ia['direcao'].upper()} (confiança {ia['confianca']}/10)\n"
-                    f"  {ia['analise']}\n"
-                    f"  ⚠️ Plano de entrada NÃO enviado — conflito entre placar e IA. Avalie o gráfico manualmente."
-                )
-            elif ia["direcao"] == "neutro":
-                bloco_ia = (
-                    f"\n  🤖 <b>IA sem convicção{padrao_txt}</b> (confiança {ia['confianca']}/10)\n"
-                    f"  {ia['analise']}\n  Prossiga com cautela extra."
-                )
-            else:
-                bloco_ia = (
-                    f"\n  🤖 <b>IA confirma{padrao_txt}</b> (confiança {ia['confianca']}/10)\n"
-                    f"  {ia['analise']}"
-                )
-        else:
-            bloco_ia = f"\n  🤖 <i>IA indisponível: {ia.get('motivo', 'erro desconhecido')} — usando só o placar técnico.</i>"
-
     opcao = sugerir_parametros_opcao(resultado["preco"], direcao)
-    posicao = calcular_tamanho_posicao(config.CAPITAL_DISPONIVEL, config.RISCO_POR_OPERACAO_PCT,
-                                        stop_alvo["preco_entrada"], stop_alvo["stop"])
+    posicao = calcular_tamanho_posicao(
+        config.CAPITAL_DISPONIVEL, config.RISCO_POR_OPERACAO_PCT,
+        stop_alvo["preco_entrada"], stop_alvo["stop"]
+    )
 
     explicacao_opcao = (
-        "uma CALL é a opção que lucra se o ativo SOBE"
+        "CALL lucra se o ativo SOBE"
         if opcao["tipo_opcao"] == "CALL"
-        else "uma PUT é a opção que lucra se o ativo CAI"
+        else "PUT lucra se o ativo CAI"
     )
 
     plano = (
         f"{cabecalho}\n{motivos_txt}\n"
-        f"  <b>Preço atual:</b> R$ {resultado['preco']:.2f}\n"
-        f"  <b>Plano sugerido:</b> entrar perto de R$ {stop_alvo['preco_entrada']} · "
-        f"sair no prejuízo (stop) se cair a R$ {stop_alvo['stop']} · "
-        f"realizar lucro (alvo) perto de R$ {stop_alvo['alvo']}\n"
+        f"  <b>Preço:</b> R$ {resultado['preco']:.2f}\n"
+        f"  <b>Entrada</b> R$ {stop_alvo['preco_entrada']} · "
+        f"<b>Stop</b> R$ {stop_alvo['stop']} · "
+        f"<b>Alvo</b> R$ {stop_alvo['alvo']}\n"
     )
 
     if posicao.get("quantidade_acoes", 0) > 0:
         plano += (
-            f"  <b>Tamanho sugerido:</b> {posicao['quantidade_acoes']} ações "
-            f"(≈ R$ {posicao['valor_posicao']}), arriscando R$ {posicao['valor_em_risco']} "
+            f"  <b>Tamanho:</b> {posicao['quantidade_acoes']} ações "
+            f"(≈ R$ {posicao['valor_posicao']}), risco R$ {posicao['valor_em_risco']} "
             f"({posicao['pct_capital_em_risco']}% do capital)\n"
         )
-    else:
-        plano += "  <b>Tamanho sugerido:</b> risco por ação muito alto pro seu capital/risco configurado — reveja o setup.\n"
 
     plano += (
-        f"  <b>Opção sugerida:</b> {opcao['tipo_opcao']}, strike próximo de "
-        f"R$ {opcao['strike_sugerido_aprox']}, vencimento {opcao['vencimento_sugerido']} "
-        f"— {explicacao_opcao}.\n"
-        f"  ⚠️ Confira a liquidez dessa opção no seu home broker antes de operar."
-        f"{bloco_ia}"
+        f"  <b>Opção:</b> {opcao['tipo_opcao']} strike ~R$ {opcao['strike_sugerido_aprox']}, "
+        f"venc. {opcao['vencimento_sugerido']} — {explicacao_opcao}\n"
+        f"  ⚠️ Confirme liquidez antes de operar."
     )
 
-    if risco_noticias["positivas"]:
-        plano += f"\n  ✅ Notícia recente favorável: {risco_noticias['positivas'][0]['titulo']}"
+    if risco_noticias.get("positivas"):
+        plano += f"\n  ✅ {risco_noticias['positivas'][0]['titulo']}"
 
     return plano
+
+
+def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
+    """
+    Roda a IA em todos os ativos com score >= SCORE_MINIMO_IA e monta
+    uma mensagem consolidada com "por que entrar / por que não entrar".
+    Sempre roda, independente de estado ou alertas anteriores.
+    """
+    api_key = getattr(config, "GEMINI_API_KEY", "")
+    if not api_key:
+        return ""
+
+    candidatos = [r for r in resultados if r["score"] >= SCORE_MINIMO_IA and r["direcao"] != "neutro"]
+    if not candidatos:
+        return "🤖 <b>Análise da IA:</b> Nenhum ativo com sinal suficiente para análise visual hoje."
+
+    sufixo = arquivo_estado.replace(".json", "")
+    blocos_ia = []
+
+    for r in candidatos[:6]:  # máximo 6 pra não estourar o limite gratuito do Gemini
+        ticker = r["ticker"]
+        caminho = os.path.join(PASTA_GRAFICOS, f"{ticker}_{sufixo}.png")
+
+        if not os.path.exists(caminho):
+            continue
+
+        print(f"  [IA] Analisando {ticker}...")
+        analise = analisar_ativo_visualmente(
+            ticker=ticker,
+            score=r["score"],
+            direcao=r["direcao"],
+            motivos=r["motivos"],
+            preco=r["preco"],
+            caminho_imagem=caminho,
+            api_key=api_key,
+        )
+        blocos_ia.append(formatar_analise_ia(ticker, r["preco"], analise))
+
+        import time
+        time.sleep(4)  # respeita o limite de 15 chamadas/minuto do plano gratuito
+
+    if not blocos_ia:
+        return ""
+
+    hoje = date.today().strftime("%d/%m/%Y")
+    cabecalho = (
+        f"🤖 <b>Análise da IA — {hoje}</b>\n"
+        f"Leitura visual dos gráficos com mais força hoje.\n\n"
+    )
+    return cabecalho + "\n\n".join(blocos_ia)
 
 
 def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
@@ -274,6 +174,7 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
                               projetar_volume: bool = False, confirmar_intradiario: bool = False,
                               risco_maximo_atr_mult: float = None,
                               margem_saida_estado: int = None):
+
     watchlist = watchlist or config.WATCHLIST
     periodo = periodo or config.PERIODO_HISTORICO
     nivel_detalhe = nivel_detalhe if nivel_detalhe is not None else config.NIVEL_DETALHE
@@ -281,9 +182,11 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
     margem_saida_estado = margem_saida_estado if margem_saida_estado is not None else config.MARGEM_SAIDA_ESTADO
 
     print(f"[{titulo}] Rodando screener...")
-    resultados = rodar_screener(watchlist=watchlist, periodo=periodo,
-                                 usar_curto_prazo=usar_curto_prazo, projetar_volume=projetar_volume,
-                                 confirmar_intradiario=confirmar_intradiario)
+    resultados = rodar_screener(
+        watchlist=watchlist, periodo=periodo,
+        usar_curto_prazo=usar_curto_prazo, projetar_volume=projetar_volume,
+        confirmar_intradiario=confirmar_intradiario,
+    )
     hoje = date.today().strftime("%d/%m/%Y")
 
     if not resultados:
@@ -291,7 +194,6 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
             config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID,
             f"📊 <b>{titulo} — {hoje}</b>\nNão consegui baixar dados de nenhum ativo hoje."
         )
-        print("Nenhum resultado. Mensagem enviada.")
         return
 
     print("Gerando gráficos...")
@@ -302,43 +204,37 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
         plotar_grafico(r["df"], r["ticker"], caminho)
         caminhos_graficos.append(caminho)
 
-    print("Carregando estado (histórico de alertas)...")
+    print("Montando resumo técnico...")
     estado = carregar_estado(arquivo_estado)
-
-    print("Checando notícias/calendário e montando resumo...")
     blocos = []
     for r in resultados:
         caminho = os.path.join(PASTA_GRAFICOS, f"{r['ticker']}_{arquivo_estado.replace('.json','')}.png")
-        blocos.append(montar_bloco_resumo(r, estado, nivel_detalhe, atr_mult=atr_mult,
-                                           risco_retorno=risco_retorno,
-                                           risco_maximo_atr_mult=risco_maximo_atr_mult,
-                                           margem_saida_estado=margem_saida_estado,
-                                           caminho_imagem=caminho))
-        estado = atualizar_estado(estado, r["ticker"], r["score"], r["direcao"], nivel_detalhe,
-                                   margem_saida=margem_saida_estado)
-
+        blocos.append(montar_bloco_resumo(
+            r, estado, nivel_detalhe,
+            atr_mult=atr_mult, risco_retorno=risco_retorno,
+            risco_maximo_atr_mult=risco_maximo_atr_mult,
+            margem_saida_estado=margem_saida_estado,
+            caminho_imagem=caminho,
+        ))
+        estado = atualizar_estado(
+            estado, r["ticker"], r["score"], r["direcao"],
+            nivel_detalhe, margem_saida=margem_saida_estado,
+        )
     salvar_estado(estado, arquivo_estado)
 
     cabecalho_msg = f"📊 <b>{titulo} — {hoje}</b>\n"
     if nota_extra:
         cabecalho_msg += f"{nota_extra}\n"
     cabecalho_msg += (
-        f"Ranking de {len(resultados)} ativo(s), do nível mais alto pro mais baixo.\n"
-        f"Plano de entrada completo só a partir de {nivel_detalhe}/10, e só na primeira "
-        f"vez que o sinal aparece (sem repetir todo dia).\n\n"
+        f"Ranking de {len(resultados)} ativo(s) — do maior sinal pro menor.\n\n"
     )
 
-    mensagem_final = (
-        cabecalho_msg
-        + "\n\n".join(blocos)
-        + "\n\n⚠️ Apoio técnico automatizado, não é recomendação de investimento. "
-          "Confirme liquidez da opção e valide com sua própria gestão de risco."
-    )
+    mensagem_final = cabecalho_msg + "\n\n".join(blocos)
 
     print("Enviando álbum de gráficos...")
     enviar_album(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, caminhos_graficos)
 
-    print("Enviando resumo em texto...")
+    print("Enviando resumo técnico...")
     LIMITE = 3800
     if len(mensagem_final) <= LIMITE:
         enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, mensagem_final)
@@ -356,7 +252,28 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
         for parte in partes:
             enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, parte)
 
-    print(f"[{titulo}] Relatório enviado com sucesso.")
+    # --- IA analisa visualmente e manda mensagem separada no final ---
+    print("Rodando análise visual da IA...")
+    mensagem_ia = rodar_analise_ia(resultados, arquivo_estado)
+    if mensagem_ia:
+        LIMITE_IA = 3800
+        if len(mensagem_ia) <= LIMITE_IA:
+            enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, mensagem_ia)
+        else:
+            partes_ia = []
+            atual = ""
+            for bloco in mensagem_ia.split("\n\n"):
+                if len(atual) + len(bloco) + 2 > LIMITE_IA:
+                    partes_ia.append(atual)
+                    atual = bloco
+                else:
+                    atual = f"{atual}\n\n{bloco}" if atual else bloco
+            if atual:
+                partes_ia.append(atual)
+            for parte in partes_ia:
+                enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, parte)
+
+    print(f"[{titulo}] Concluído.")
 
 
 if __name__ == "__main__":
