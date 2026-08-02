@@ -1,19 +1,18 @@
-name: B3 Swing Analyzer
+name: B3 Robot Daily
 
 on:
   schedule:
-    - cron: '0 9 * * 1-5' # Roda às 9h UTC de segunda a sexta
-  workflow_dispatch:      # Permite rodar manualmente
+    - cron: '0 9 * * 1-5' # Seg a Sex às 09:00 UTC (06:00 BR)
+  workflow_dispatch:
 
 jobs:
-  analyze:
+  run-bot:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
@@ -23,7 +22,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Analyzer
+      - name: Run Bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
