@@ -17,7 +17,7 @@ OPLAB_TOKEN = os.environ.get("OPLAB_TOKEN", "")  # deixe vazio se não tiver
 # --- IA visual (Google Gemini) para revisar os sinais olhando o gráfico ---
 # Plano GRATUITO (sem prazo de validade): aistudio.google.com -> Get API Key
 # Sem chave configurada, o robô usa só o placar técnico (não quebra nada).
-GEMINI_API_KEY = "AQ.Ab8RN6Lf20q3aBizeosx0Rv1R_3FchC6DX5l2jEz2ukva9n-uw"
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6Lf20q3aBizeosx0Rv1R_3FchC6DX5l2jEz2ukva9n-uw")
 USAR_IA_ANALISE = True
 
 # --- Screener ---
