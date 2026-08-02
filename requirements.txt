@@ -1,6 +1,6 @@
-pyTelegramBotAPI
-google-genai
-google-generativeai
+yfinance
 pandas
 numpy
+matplotlib
+feedparser
 requests

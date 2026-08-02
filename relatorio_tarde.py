@@ -1,42 +1,40 @@
-name: Relatorio Tarde B3 (Prazo Curto)
+"""
+Relatório da Tarde — versão focada em prazo mais curto (tipo "até o fim
+da semana"), rodando numa watchlist menor (PETR4, VALE3, ITUB4, WEGE3).
 
-# Roda automaticamente em dias úteis às 16:00 UTC (13:00 no horário de Brasília)
-# e também permite rodar manualmente pelo botão "Run workflow" no GitHub.
-on:
-  schedule:
-    - cron: "13 16 * * 1-5"
-  workflow_dispatch:
+Diferenças pro relatório da manhã (relatorio_diario.py):
+- Watchlist menor (config.WATCHLIST_TARDE)
+- Stop mais apertado (ATR_MULT_TARDE) e alvo mais próximo (RISCO_RETORNO_TARDE)
+  — faz sentido pra prazo curto: você quer um alvo alcançável em poucos dias,
+  não um alvo de swing de semanas
+- Estado separado (estado_tarde.json) — não interfere no rastreamento do
+  relatório da manhã, mesmo repetindo ativos (ex: PETR4 nas duas listas)
 
-permissions:
-  contents: write   # necessário pra salvar o estado_tarde.json de volta no repositório
+USO:
+    python relatorio_tarde.py
 
-jobs:
-  rodar-relatorio-tarde:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Baixar o código do repositório
-        uses: actions/checkout@v4
+Roda às 13h (horário de Brasília) via GitHub Actions — veja
+.github/workflows/relatorio_tarde.yml
+"""
 
-      - name: Configurar Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+import config
+from relatorio_diario import gerar_e_enviar_relatorio
 
-      - name: Instalar dependências
-        run: pip install yfinance pandas numpy matplotlib feedparser requests
-
-      - name: Rodar relatório da tarde
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          OPLAB_TOKEN: ${{ secrets.OPLAB_TOKEN }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python relatorio_tarde.py
-
-      - name: Salvar histórico de alertas (estado_tarde.json)
-        run: |
-          git config user.name "robo-b3-bot"
-          git config user.email "actions@github.com"
-          git add estado_tarde.json
-          git diff --staged --quiet || git commit -m "Atualiza estado_tarde.json [skip ci]"
-          git push
+if __name__ == "__main__":
+    gerar_e_enviar_relatorio(
+        watchlist=config.WATCHLIST_TARDE,
+        periodo=config.PERIODO_HISTORICO,
+        nivel_detalhe=config.NIVEL_DETALHE_TARDE,
+        arquivo_estado="estado_tarde.json",
+        atr_mult=config.ATR_MULT_TARDE,
+        risco_retorno=config.RISCO_RETORNO_TARDE,
+        titulo="Relatório B3 — Tarde (prazo curto)",
+        nota_extra=(
+            f"Foco em operações de prazo mais curto (~{config.MAX_DIAS_HOLDING_TARDE} dias úteis, "
+            f"tipo até o fim da semana). Indicadores mais rápidos (SMA5/10/20, RSI7, MACD 5/13/5) "
+            f"no gráfico diário, confirmados (ou não) pelo gráfico de 1 hora."
+        ),
+        usar_curto_prazo=True,
+        projetar_volume=True,
+        confirmar_intradiario=True,
+    )

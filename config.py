@@ -1,42 +1,59 @@
+"""
+Configurações — preencha com suas chaves antes de rodar o relatório diário.
+Por segurança, prefira usar variáveis de ambiente em vez de deixar as
+chaves escritas direto aqui (especialmente se for subir isso pro GitHub).
+"""
+
 import os
 
-# ==============================================================================
-# CONFIGURAÇÕES DO TELEGRAM E IA
-# ==============================================================================
+# --- Telegram ---
+# Veja instruções em telegram_utils.py (docstring) para gerar o token.
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "COLOQUE_SEU_TOKEN_AQUI")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "COLOQUE_SEU_CHAT_ID_AQUI")
 
-# Leitura das variáveis de ambiente do GitHub Actions
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+# --- OpLab (opcional, para cadeia de opções real) ---
+OPLAB_TOKEN = os.environ.get("OPLAB_TOKEN", "")  # deixe vazio se não tiver
+
+# --- IA visual (Google Gemini) para revisar os sinais olhando o gráfico ---
+# Plano GRATUITO (sem prazo de validade): aistudio.google.com -> Get API Key
+# Sem chave configurada, o robô usa só o placar técnico (não quebra nada).
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+USAR_IA_ANALISE = True
 
-# Modelo da IA (Atualizado para evitar erro 404)
-GEMINI_MODEL = "gemini-1.5-flash" 
-
+# --- Screener ---
+# Ativos que você opera.
 WATCHLIST = [
-    "PETR4", "VALE3", "ITUB4", "BBDC4", 
-    "WEGE3", "RENT3", "MGLU3", "LREN3"
+    "PETR4", "VALE3", "ITUB4", "BBAS3", "WEGE3", "BBDC4", "PRIO3",
+    "SUZB3", "B3SA3", "AXIA3", "AXIA6", "ABEV3", "RENT3", "EQTL3",
+    "JBSS32", "CMIG4", "GGBR4", "USIM5", "RAIL3", "LREN3",
 ]
 
-def validar_config():
-    print("\n🔍 VERIFICANDO CONFIGURAÇÕES...")
-    
-    t_len = len(TELEGRAM_TOKEN)
-    c_len = len(str(TELEGRAM_CHAT_ID)) if TELEGRAM_CHAT_ID else 0
-    g_len = len(GEMINI_API_KEY) if GEMINI_API_KEY else 0
-    
-    print(f"   • TELEGRAM_TOKEN: {'✅' if t_len > 10 else '❌'} ({t_len} chars)")
-    print(f"   • TELEGRAM_CHAT_ID: {'✅' if c_len > 5 else '❌'} ({c_len} chars)")
-    print(f"   • GEMINI_API_KEY: {'✅' if g_len > 20 else '❌'} ({g_len} chars)")
+NIVEL_DETALHE = 6          # nível mínimo (0-10) para receber plano de entrada completo
+PERIODO_HISTORICO = "6mo"  # período de dados baixado para os cálculos
 
-    erros = []
-    if t_len < 10: erros.append("Token do Telegram inválido.")
-    if c_len < 5: erros.append("Chat ID do Telegram inválido.")
-    if g_len < 20: erros.append("Chave da API Gemini inválida.")
-    
-    if erros:
-        print("\n❌ ERROS CRÍTICOS:")
-        for e in erros: print(f"   - {e}")
-        return False
-    
-    print("\n✅ Configurações OK! Iniciando análise...\n")
-    return True
+# --- Gestão de risco (calculadora de tamanho de posição) ---
+CAPITAL_DISPONIVEL = 10000.0     # capital total que você usa pra operar (ajuste pro seu valor real)
+RISCO_POR_OPERACAO_PCT = 1.0     # % do capital que você aceita perder POR operação (1-2% é o padrão de mercado)
+RISCO_MAXIMO_ATR_MULT = 3.0      # teto de risco por ação, em múltiplos de ATR (evita stop absurdo em forte tendência)
+MARGEM_SAIDA_ESTADO = 2          # zona de amortecimento (em pontos) pra não repetir alerta quando o score oscila perto do gatilho
+
+# --- Calendário de resultados ---
+DIAS_MINIMOS_ANTES_RESULTADO = 5  # não sugere entrada se faltar menos que isso pro próximo resultado trimestral
+
+# --- Relatório da tarde (13h, foco em prazo mais curto — até o fim da semana) ---
+WATCHLIST_TARDE = ["PETR4", "VALE3", "ITUB4", "WEGE3"]
+NIVEL_DETALHE_TARDE = 6       # pode baixar pra 5 se achar que fica sinal demais raro
+ATR_MULT_TARDE = 1.0          # stop mais apertado que o padrão (1.5)
+RISCO_RETORNO_TARDE = 1.5     # alvo mais próximo (mais fácil de atingir em poucos dias)
+MAX_DIAS_HOLDING_TARDE = 5    # referência de prazo (não é usado pro stop/alvo, só informativo no texto)
+
+# --- Nomes de empresas para busca de notícias (Google News busca melhor por nome) ---
+NOME_EMPRESA = {
+    "PETR4": "Petrobras", "VALE3": "Vale", "ITUB4": "Itaú Unibanco",
+    "BBAS3": "Banco do Brasil", "WEGE3": "WEG", "BBDC4": "Bradesco",
+    "PRIO3": "PetroRio", "SUZB3": "Suzano", "B3SA3": "B3",
+    "AXIA3": "Axia Energia", "AXIA6": "Axia Energia", "ABEV3": "Ambev",
+    "RENT3": "Localiza", "EQTL3": "Equatorial Energia", "JBSS32": "JBS",
+    "CMIG4": "Cemig", "GGBR4": "Gerdau", "USIM5": "Usiminas",
+    "RAIL3": "Rumo", "LREN3": "Lojas Renner",
+}
