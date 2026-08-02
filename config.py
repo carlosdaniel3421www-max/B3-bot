@@ -1,59 +1,83 @@
-"""
-Configurações — preencha com suas chaves antes de rodar o relatório diário.
-Por segurança, prefira usar variáveis de ambiente em vez de deixar as
-chaves escritas direto aqui (especialmente se for subir isso pro GitHub).
-"""
-
 import os
 
-# --- Telegram ---
-# Veja instruções em telegram_utils.py (docstring) para gerar o token.
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "COLOQUE_SEU_TOKEN_AQUI")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "COLOQUE_SEU_CHAT_ID_AQUI")
+# ==============================================================================
+# CONFIGURAÇÕES DO TELEGRAM
+# ==============================================================================
+# Obtenha em https://t.me/BotFather
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "SEU_TOKEN_DO_TELEGRAM_AQUI")
 
-# --- OpLab (opcional, para cadeia de opções real) ---
-OPLAB_TOKEN = os.environ.get("OPLAB_TOKEN", "")  # deixe vazio se não tiver
+# Obtenha em https://t.me/userinfobot (envie /start para ele)
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "SEU_CHAT_ID_AQUI")
 
-# --- IA visual (Google Gemini) para revisar os sinais olhando o gráfico ---
-# Plano GRATUITO (sem prazo de validade): aistudio.google.com -> Get API Key
-# Sem chave configurada, o robô usa só o placar técnico (não quebra nada).
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6Lf20q3aBizeosx0Rv1R_3FchC6DX5l2jEz2ukva9n-uw")
-USAR_IA_ANALISE = True
+# ==============================================================================
+# CONFIGURAÇÕES DA IA (GOOGLE GEMINI)
+# ==============================================================================
+# 1. Crie uma chave gratuita em: https://aistudio.google.com/app/apikey
+# 2. No GitHub: Vá em Settings > Secrets and variables > Actions > New repository secret
+#    Nome: GEMINI_API_KEY
+#    Valor: (cole sua chave aqui)
+# 3. Para testes locais, cole a chave abaixo entre as aspas.
 
-# --- Screener ---
-# Ativos que você opera.
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "SUA_CHAVE_GEMINI_AQUI_SEM_ESPACOS")
+
+# Modelo da IA (gemini-1.5-flash é o mais rápido e barato/grátis)
+GEMINI_MODEL = "gemini-1.5-flash"
+
+# ==============================================================================
+# CONFIGURAÇÕES GERAIS DO ROBÔ
+# ==============================================================================
+# Lista de ativos para monitorar (Adicione ou remova conforme necessário)
 WATCHLIST = [
-    "PETR4", "VALE3", "ITUB4", "BBAS3", "WEGE3", "BBDC4", "PRIO3",
-    "SUZB3", "B3SA3", "AXIA3", "AXIA6", "ABEV3", "RENT3", "EQTL3",
-    "JBSS32", "CMIG4", "GGBR4", "USIM5", "RAIL3", "LREN3",
+    "PETR4",
+    "VALE3",
+    "ITUB4",
+    "BBDC4",
+    "BBAS3",
+    "WEGE3",
+    "RENT3",
+    "LREN3",
+    "MGLU3",
+    "HAPV3"
 ]
 
-NIVEL_DETALHE = 6          # nível mínimo (0-10) para receber plano de entrada completo
-PERIODO_HISTORICO = "6mo"  # período de dados baixado para os cálculos
+# Configurações de Análise Técnica
+PERIODO_ANALISE = 60  # Dias históricos para calcular indicadores
+MEDIA_MOVEL_CURTA = 9
+MEDIA_MOVEL_LONGA = 21
 
-# --- Gestão de risco (calculadora de tamanho de posição) ---
-CAPITAL_DISPONIVEL = 10000.0     # capital total que você usa pra operar (ajuste pro seu valor real)
-RISCO_POR_OPERACAO_PCT = 1.0     # % do capital que você aceita perder POR operação (1-2% é o padrão de mercado)
-RISCO_MAXIMO_ATR_MULT = 3.0      # teto de risco por ação, em múltiplos de ATR (evita stop absurdo em forte tendência)
-MARGEM_SAIDA_ESTADO = 2          # zona de amortecimento (em pontos) pra não repetir alerta quando o score oscila perto do gatilho
+# Limites de Score para disparo de alertas
+SCORE_MINIMO_COMPRA = 6.0
+SCORE_MINIMO_VENDA = 6.0
 
-# --- Calendário de resultados ---
-DIAS_MINIMOS_ANTES_RESULTADO = 5  # não sugere entrada se faltar menos que isso pro próximo resultado trimestral
+# ==============================================================================
+# VALIDAÇÃO INICIAL (DEBUG)
+# ==============================================================================
+def verificar_configuracoes():
+    """Verifica se as configurações essenciais estão presentes."""
+    erros = []
+    
+    if TELEGRAM_BOT_TOKEN == "SEU_TOKEN_DO_TELEGRAM_AQUI":
+        erros.append("❌ Token do Telegram não configurado.")
+        
+    if TELEGRAM_CHAT_ID == "SEU_CHAT_ID_AQUI":
+        erros.append("❌ Chat ID do Telegram não configurado.")
+        
+    # Verificação rigorosa da chave da IA
+    if not GEMINI_API_KEY or GEMINI_API_KEY == "SUA_CHAVE_GEMINI_AQUI_SEM_ESPACOS":
+        erros.append("❌ Chave da API do Gemini (GEMINI_API_KEY) não configurada ou inválida.")
+        erros.append("   -> Configure no GitHub Secrets ou edite este arquivo localmente.")
+    else:
+        print(f"✅ Chave da IA detectada (iniciada com: {GEMINI_API_KEY[:5]}...)")
 
-# --- Relatório da tarde (13h, foco em prazo mais curto — até o fim da semana) ---
-WATCHLIST_TARDE = ["PETR4", "VALE3", "ITUB4", "WEGE3"]
-NIVEL_DETALHE_TARDE = 6       # pode baixar pra 5 se achar que fica sinal demais raro
-ATR_MULT_TARDE = 1.0          # stop mais apertado que o padrão (1.5)
-RISCO_RETORNO_TARDE = 1.5     # alvo mais próximo (mais fácil de atingir em poucos dias)
-MAX_DIAS_HOLDING_TARDE = 5    # referência de prazo (não é usado pro stop/alvo, só informativo no texto)
+    if erros:
+        print("\n⚠️  ATENÇÃO: Configurações pendentes:")
+        for erro in erros:
+            print(erro)
+        return False
+    
+    print("\n✅ Todas as configurações validadas com sucesso!")
+    return True
 
-# --- Nomes de empresas para busca de notícias (Google News busca melhor por nome) ---
-NOME_EMPRESA = {
-    "PETR4": "Petrobras", "VALE3": "Vale", "ITUB4": "Itaú Unibanco",
-    "BBAS3": "Banco do Brasil", "WEGE3": "WEG", "BBDC4": "Bradesco",
-    "PRIO3": "PetroRio", "SUZB3": "Suzano", "B3SA3": "B3",
-    "AXIA3": "Axia Energia", "AXIA6": "Axia Energia", "ABEV3": "Ambev",
-    "RENT3": "Localiza", "EQTL3": "Equatorial Energia", "JBSS32": "JBS",
-    "CMIG4": "Cemig", "GGBR4": "Gerdau", "USIM5": "Usiminas",
-    "RAIL3": "Rumo", "LREN3": "Lojas Renner",
-}
+# Executa a verificação ao importar o módulo
+if __name__ == "__main__":
+    verificar_configuracoes()
