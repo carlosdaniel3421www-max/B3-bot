@@ -1,6 +1,6 @@
 {
   "BBAS3": {
-    "score": 6,
+    "score": 7,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-01"
   },
@@ -21,6 +21,16 @@
   },
   "JBSS32": {
     "score": 8,
+    "direcao": "compra",
+    "data_primeiro_alerta": "2026-08-02"
+  },
+  "SUZB3": {
+    "score": 6,
+    "direcao": "compra",
+    "data_primeiro_alerta": "2026-08-02"
+  },
+  "CMIG4": {
+    "score": 6,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-02"
   }
