@@ -85,12 +85,30 @@ def classificar_noticias(noticias: list) -> dict:
 
 
 def checar_risco_noticias(nome_busca: str) -> dict:
-    """Função de conveniência: busca + classifica em uma chamada."""
-    noticias = buscar_noticias(nome_busca)
-    resultado = classificar_noticias(noticias)
-    resultado["bloquear_entrada"] = len(resultado["alertas"]) > 0
-    return resultado
+    """
+    Busca notícias e retorna classificação + contexto bruto
+    para a camada de inteligência artificial.
+    """
 
+    noticias = buscar_noticias(nome_busca)
+
+    resultado = classificar_noticias(
+        noticias
+    )
+
+
+    # Mantém as manchetes completas
+    # para o Gemini analisar contexto
+
+    resultado["noticias"] = noticias
+
+
+    resultado["bloquear_entrada"] = (
+        len(resultado["alertas"]) > 0
+    )
+
+
+    return resultado
 
 if __name__ == "__main__":
     import sys
