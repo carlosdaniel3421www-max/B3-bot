@@ -1,18 +1,22 @@
 import os
 
 # ==============================================================================
-# LEITURA DAS VARIÁVEIS DE AMBIENTE (GITHUB SECRETS)
+# CONFIGURAÇÕES DO TELEGRAM E IA
 # ==============================================================================
-# Usando exatamente os nomes que você criou no GitHub:
-# 1. TELEGRAM_TOKEN
-# 2. TELEGRAM_CHAT_ID
-# 3. GEMINI_API_KEY
 
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+# Tenta pegar do GitHub Secrets primeiro. Se falhar (estiver vazio), usa o valor fixo abaixo.
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
-# Configurações Padrão
+# 🚨 FALLBACK DE EMERGÊNCIA: Cole seu token aqui entre as aspas se o Secret do GitHub falhar.
+# Exemplo: "123456789:AAFdB...xyz"
+TOKEN_FIXO_EMERGENCIA = "COLE_SEU_TOKEN_AQUI_SE_O_GITHUB_FALHAR"
+
+# Lógica de prioridade: Usa o fixo se a variável de ambiente estiver vazia
+if not TELEGRAM_TOKEN and TOKEN_FIXO_EMERGENCIA != "COLE_SEU_TOKEN_AQUI_SE_O_GITHUB_FALHAR":
+    TELEGRAM_TOKEN = TOKEN_FIXO_EMERGENCIA
+
 GEMINI_MODEL = "gemini-1.5-flash"
 
 WATCHLIST = [
@@ -21,41 +25,29 @@ WATCHLIST = [
 ]
 
 def validar_config():
-    """
-    Verifica se as variáveis foram carregadas corretamente.
-    Imprime logs detalhados para debug no GitHub Actions.
-    """
-    print("\n🔍 VERIFICANDO CONFIGURAÇÕES (GITHUB SECRETS)...")
+    print("\n🔍 VERIFICANDO CONFIGURAÇÕES...")
     
-    # Debug: Mostra se as variáveis existem e seu tamanho (não mostra o valor por segurança)
-    token_len = len(TELEGRAM_BOT_TOKEN)
-    chat_id_val = "Presente" if TELEGRAM_CHAT_ID else "AUSENTE"
-    key_len = len(GEMINI_API_KEY)
+    # Debug simples
+    t_len = len(TELEGRAM_TOKEN)
+    c_len = len(str(TELEGRAM_CHAT_ID)) if TELEGRAM_CHAT_ID else 0
+    g_len = len(GEMINI_API_KEY) if GEMINI_API_KEY else 0
     
-    print(f"   • TELEGRAM_TOKEN: {'✅ Detectado' if token_len > 10 else '❌ FALTANDO'} ({token_len} chars)")
-    print(f"   • TELEGRAM_CHAT_ID: {'✅ ' + chat_id_val if TELEGRAM_CHAT_ID else '❌ AUSENTE'}")
-    print(f"   • GEMINI_API_KEY: {'✅ Detectado' if key_len > 10 else '❌ FALTANDO'} ({key_len} chars)")
+    print(f"   • TELEGRAM_TOKEN: {'✅' if t_len > 10 else '❌'} ({t_len} chars)")
+    print(f"   • TELEGRAM_CHAT_ID: {'✅' if c_len > 5 else '❌'} ({c_len} chars)")
+    print(f"   • GEMINI_API_KEY: {'✅' if g_len > 20 else '❌'} ({g_len} chars)")
 
     erros = []
-    
-    if token_len < 10:
-        erros.append("O Secret 'TELEGRAM_TOKEN' não foi encontrado ou é muito curto.")
-        
-    if not TELEGRAM_CHAT_ID:
-        erros.append("O Secret 'TELEGRAM_CHAT_ID' não foi encontrado.")
-        
-    if key_len < 10:
-        erros.append("O Secret 'GEMINI_API_KEY' não foi encontrado ou é inválido.")
+    if t_len < 10:
+        erros.append("Token do Telegram inválido ou faltando.")
+    if c_len < 5:
+        erros.append("Chat ID do Telegram inválido ou faltando.")
+    if g_len < 20:
+        erros.append("Chave da API Gemini inválida ou faltando.")
     
     if erros:
-        print("\n❌ ERROS CRÍTICOS DETECTADOS:")
-        for e in erros:
-            print(f"   - {e}")
-        print("\n💡 DICA: Verifique se os nomes em Settings > Secrets estão EXATAMENTE assim:")
-        print("   TELEGRAM_TOKEN")
-        print("   TELEGRAM_CHAT_ID")
-        print("   GEMINI_API_KEY")
+        print("\n❌ ERROS CRÍTICOS:")
+        for e in erros: print(f"   - {e}")
         return False
     
-    print("\n✅ TODAS AS CONFIGURAÇÕES VALIDADAS COM SUCESSO!\n")
+    print("\n✅ Configurações OK! Iniciando análise...\n")
     return True
