@@ -2,7 +2,7 @@ name: B3 Robot Daily
 
 on:
   schedule:
-    - cron: '0 9 * * 1-5' # Seg a Sex às 09:00 UTC (06:00 BR)
+    - cron: '0 9 * * 1-5'
   workflow_dispatch:
 
 jobs:
@@ -24,7 +24,8 @@ jobs:
 
       - name: Run Bot
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          # O NOME AQUI DEVE SER IGUAL AO DO SEU SECRET E AO QUE O PYTHON ESPERA
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python relatorio_diario.py
