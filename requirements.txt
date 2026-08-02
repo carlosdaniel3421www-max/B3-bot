@@ -1,0 +1,6 @@
+pyTelegramBotAPI
+google-generativeai
+pandas
+ta-lib
+requests
+numpy
