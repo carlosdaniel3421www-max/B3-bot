@@ -1,147 +1,218 @@
 """
-Análise com IA visual (Google Gemini) — manda a IMAGEM do gráfico gerado
-pelo robô pra IA analisar como um trader de verdade faria, olhando o
-desenho do gráfico, não só números. Capta padrões visuais (bandeiras,
-triângulos, divergências, candles de reversão, rompimentos) que um sistema
-de regras baseado em números nunca consegue ver.
+Camada de análise complementar usando Google Gemini.
 
-PLANO GRATUITO DO GEMINI (sem prazo de validade, sem cartão de crédito):
-  - Até 1.500 chamadas por dia
-  - Até 15 chamadas por minuto
-  - Mais que suficiente pro nosso uso (máx ~6 chamadas por relatório)
-  - Pegue sua chave GRÁTIS em: aistudio.google.com → Get API Key
+Responsabilidade:
+- Receber a análise técnica já feita pelo robô.
+- Enviar dados + gráfico para a IA.
+- Retornar uma opinião complementar.
 
-Configure em config.py -> GEMINI_API_KEY (ou variável de ambiente).
+IMPORTANTE:
+A IA NÃO calcula indicadores.
+A IA NÃO altera score.
+A IA NÃO substitui o motor técnico.
+
+Ela apenas atua como um segundo analista.
 """
 
-import base64
+from __future__ import annotations
+
 import json
-import requests
+import logging
+import time
+
+from pathlib import Path
+from typing import Any, Optional, Sequence, Mapping
 
 
-GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    "gemini-2.0-flash:generateContent"
-)
-
-PROMPT_SISTEMA = """Você é um trader profissional de swing trade com décadas de
-experiência na bolsa brasileira (B3), especialista em leitura de gráficos e
-operações com opções.
-
-Você recebe:
-1. A IMAGEM de um gráfico técnico com 4 painéis:
-   - Painel principal: preço + médias móveis (SMA9/21/50/200) + VWAP + suporte/resistência
-   - Volume: barras coloridas (verde = alta, vermelho = baixa)
-   - RSI(14) + Estocástico com linhas de 30/70
-   - MACD com histograma
-
-2. Um resumo textual do que um sistema de regras calculou (placar técnico)
-
-SUA TAREFA: Olhar A IMAGEM de verdade e dar seu parecer visual.
-
-REGRAS FUNDAMENTAIS DE LEITURA:
-- RSI/Estocástico esticados DENTRO de tendência forte = força (continuação), NÃO reversão
-- Rompimento de máxima/mínima com volume acima da média = continua na direção do rompimento
-- RSI/Estocástico overbought/oversold SÓ significa reversão em mercado LATERAL (sem tendência)
-- Divergência baixista: preço fazendo nova máxima mas RSI/MACD não acompanha = sinal de fraqueza
-- Divergência altista: preço fazendo nova mínima mas RSI/MACD não acompanha = possível reversão
-- Volume crescente na direção da tendência = confirma o movimento
-
-RESPONDA ESTRITAMENTE em JSON, sem nenhum texto antes ou depois:
-{
-  "direcao": "compra" ou "venda" ou "neutro",
-  "confianca": (número de 0 a 10),
-  "padrao_grafico": "descreva o padrão visual que você identificou, ou 'sem padrão claro' se não achou nada específico",
-  "analise": "3 a 5 frases explicando o que você VIU NO DESENHO do gráfico e seu raciocínio. Fale como analista profissional, em português. Mencione o que está vendo nas médias, volume, osciladores e se há algum padrão gráfico relevante.",
-  "concorda_com_placar": true ou false
-}"""
+logger = logging.getLogger(__name__)
 
 
-def montar_resumo_tecnico(resultado: dict, stop_alvo: dict = None) -> str:
-    """Monta resumo textual dos dados técnicos como apoio contextual pra IA."""
-    linhas = [
-        f"Ativo: {resultado['ticker']}",
-        f"Preço atual: R$ {resultado['preco']:.2f}",
-        f"Direção apontada pelo placar técnico: {resultado['direcao'].upper()}",
-        f"Placar técnico: {resultado['score']}/10",
-        "Motivos identificados pelo sistema de regras:",
-    ]
-    for m in resultado["motivos"]:
-        linhas.append(f"  - {m}")
-
-    if stop_alvo:
-        linhas.append(f"Stop sugerido: R$ {stop_alvo['stop']}")
-        linhas.append(f"Alvo sugerido: R$ {stop_alvo['alvo']}")
-
-    return "\n".join(linhas)
-
-
-def analisar_com_ia(resumo_tecnico: str, api_key: str,
-                     caminho_imagem: str = None, **kwargs) -> dict:
+class AIAnalyzer:
     """
-    Manda a imagem do gráfico + resumo textual pro Gemini analisar.
-    Retorna dict com: disponivel, direcao, confianca, padrao_grafico, analise,
-    concorda_com_placar. Se falhar por qualquer motivo, retorna disponivel=False
-    e o chamador cai de volta pro placar técnico puro.
+    Analista complementar usando Google Gemini.
+
+    O robô principal continua sendo responsável por:
+    - indicadores
+    - score
+    - direção
+    - gestão de risco
+
+    O Gemini interpreta:
+    - gráfico
+    - contexto
+    - qualidade do setup
     """
-    if not api_key:
-        return {"disponivel": False, "motivo": "Sem chave de API do Gemini configurada"}
 
-    partes = []
 
-    # Inclui a imagem do gráfico (o principal)
-    if caminho_imagem:
+    DEFAULT_MODEL = "gemini-2.5-flash"
+
+
+    def __init__(
+        self,
+        api_key: str,
+        model: Optional[str] = None,
+        timeout_seconds: int = 45,
+        max_retries: int = 3,
+    ):
+
+        self.api_key = api_key
+
+        self.model = model or self.DEFAULT_MODEL
+
+        self.timeout_seconds = timeout_seconds
+
+        self.max_retries = max_retries
+
+        self._client = None
+
+
+
+    def _get_client(self):
+        """
+        Cria cliente Gemini somente quando necessário.
+        """
+
+        if self._client:
+            return self._client
+
+
         try:
-            with open(caminho_imagem, "rb") as f:
-                imagem_b64 = base64.b64encode(f.read()).decode("utf-8")
-            partes.append({
-                "inline_data": {"mime_type": "image/png", "data": imagem_b64}
-            })
+            from google import genai
+
+            self._client = genai.Client(
+                api_key=self.api_key
+            )
+
+            return self._client
+
+
         except Exception as e:
-            return {"disponivel": False, "motivo": f"Falha ao ler imagem: {e}"}
-    else:
-        return {"disponivel": False, "motivo": "Imagem do gráfico não encontrada"}
 
-    # Inclui o resumo textual como contexto adicional
-    partes.append({
-        "text": f"{PROMPT_SISTEMA}\n\nDados do sistema de regras:\n{resumo_tecnico}"
-    })
+            logger.error(
+                "Erro criando cliente Gemini: %s",
+                e
+            )
 
-    try:
-        resposta = requests.post(
-            GEMINI_URL,
-            params={"key": api_key},
-            headers={"Content-Type": "application/json"},
-            json={
-                "contents": [{"parts": partes}],
-                "generationConfig": {
-                    "temperature": 0.2,      # baixa pra respostas mais consistentes
-                    "maxOutputTokens": 600,
-                    "responseMimeType": "application/json",
-                }
-            },
-            timeout=45,
+            return None
+
+
+
+    def analyze_asset(
+        self,
+        ticker: str,
+        current_price: float,
+        ema21: float,
+        ema200: float,
+        rsi: float,
+        macd: float,
+        volume: float,
+        atr: float,
+        support: float,
+        resistance: float,
+        score: float,
+        direction: str,
+        reasons: Sequence[str],
+        news: Optional[Sequence[Mapping[str, Any]]] = None,
+        chart_path: Optional[str | Path] = None,
+        extra_context: Optional[dict] = None,
+
+    ) -> Optional[dict[str, Any]]:
+
+        """
+        Executa análise completa da IA.
+
+        Retorna:
+
+        {
+            operacao,
+            confianca,
+            entrada,
+            strike,
+            stop,
+            alvo,
+            explicacao
+        }
+
+        Caso falhe:
+        retorna None.
+
+        O robô nunca deve parar por causa da IA.
+        """
+
+
+        if not self.api_key:
+
+            logger.warning(
+                "Gemini sem API KEY"
+            )
+
+            return None
+
+
+
+        client = self._get_client()
+
+
+        if not client:
+
+            return None
+
+
+
+        payload = self._build_payload(
+            ticker=ticker,
+            current_price=current_price,
+            ema21=ema21,
+            ema200=ema200,
+            rsi=rsi,
+            macd=macd,
+            volume=volume,
+            atr=atr,
+            support=support,
+            resistance=resistance,
+            score=score,
+            direction=direction,
+            reasons=reasons,
+            news=news,
+            extra_context=extra_context
         )
-        resposta.raise_for_status()
-        dados = resposta.json()
 
-        # Extrai o texto da resposta do Gemini
-        texto = dados["candidates"][0]["content"]["parts"][0]["text"].strip()
 
-        # Remove blocos markdown se o Gemini colocar mesmo pedindo JSON direto
-        if "```" in texto:
-            texto = texto.split("```")[1]
-            if texto.startswith("json"):
-                texto = texto[4:]
-            texto = texto.strip()
+        prompt = self._build_prompt(
+            payload
+        )
 
-        analise = json.loads(texto)
-        analise["disponivel"] = True
-        return analise
 
-    except requests.HTTPError as e:
-        if e.response.status_code == 429:
-            return {"disponivel": False, "motivo": "Limite de chamadas atingido (tente de novo em 1 minuto)"}
-        return {"disponivel": False, "motivo": f"Erro HTTP {e.response.status_code}: {e}"}
-    except Exception as e:
-        return {"disponivel": False, "motivo": f"Erro ao chamar Gemini: {e}"}
+        for attempt in range(1, self.max_retries + 1):
+
+            try:
+
+                response = self._call_gemini(
+                    client,
+                    prompt,
+                    chart_path
+                )
+
+
+                if response:
+
+                    return self._validate_response(
+                        response,
+                        direction
+                    )
+
+
+            except Exception as e:
+
+                logger.warning(
+                    "Tentativa %s Gemini falhou: %s",
+                    attempt,
+                    e
+                )
+
+
+                time.sleep(attempt)
+
+
+
+        return None
