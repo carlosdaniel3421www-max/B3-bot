@@ -1,232 +1,272 @@
+"""
+Relatório Diário — orquestra tudo:
+  1. Roda o screener na watchlist, avaliando cada ativo de 0 a 10
+  2. Manda TODOS os gráficos juntos, num álbum só
+  3. Manda um resumo em texto, ranqueado do nível mais alto pro mais baixo
+  4. Para os ativos com nível alto (>= nivel_detalhe) que sejam alerta NOVO
+     (não repete o mesmo plano todo dia — veja estado.py):
+       - Checa notícias de risco
+       - Checa calendário de resultados (evita véspera de balanço)
+       - Calcula stop/alvo (ATR + suporte/resistência, com teto de risco)
+       - Calcula tamanho de posição sugerido (gestão de risco)
+       - Sugere parâmetros de opção (strike/vencimento)
+
+A lógica principal (gerar_e_enviar_relatorio) é parametrizável, pra poder
+ser reaproveitada por outros relatórios (ex: relatorio_tarde.py, com
+watchlist, prazo e motor de indicadores diferentes) sem duplicar código.
+
+USO (relatório da manhã, padrão):
+    python relatorio_diario.py
+
+Agende isso pra rodar todo dia de manhã usando GitHub Actions (veja o
+README), cron (Linux/Mac) ou o Agendador de Tarefas (Windows).
+"""
+
 import os
-import sys
-import time
-import requests
-import pandas as pd
-import numpy as np
-import telebot
-from datetime import datetime
+from datetime import date
 
-# Importações locais
 import config
-from ia_analise import analisar_com_ia
-from opcoes import sugerir_parametros_opcao, escolher_melhor_opcao
+from screener import rodar_screener
+from noticias import checar_risco_noticias
+from opcoes import sugerir_parametros_opcao
+from calendario import checar_resultado_proximo
+from gestao_risco import calcular_tamanho_posicao
+from estado import carregar_estado, salvar_estado, eh_alerta_novo, atualizar_estado
+from ia_analise import montar_resumo_tecnico, analisar_com_ia
+from b3_swing_analyzer import sugerir_stop_alvo, plotar_grafico
+from telegram_utils import enviar_mensagem, enviar_album
 
-# ==============================================================================
-# CÁLCULOS TÉCNICOS NATIVOS (Sem dependência de TA-Lib)
-# ==============================================================================
+PASTA_GRAFICOS = "graficos_tmp"
 
-def calcular_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
 
-def calcular_macd(series, fast=12, slow=26, signal=9):
-    exp1 = series.ewm(span=fast, adjust=False).mean()
-    exp2 = series.ewm(span=slow, adjust=False).mean()
-    macd_line = exp1 - exp2
-    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    hist = macd_line - signal_line
-    return macd_line, signal_line, hist
+def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
+                         atr_mult: float = 1.5, risco_retorno: float = 2.0,
+                         risco_maximo_atr_mult: float = 3.0, margem_saida_estado: int = 2,
+                         caminho_imagem: str = None) -> str:
+    """
+    Monta o bloco de texto para UM ativo no resumo final.
+    - Direção "neutro" (sinais empatados/conflitantes): só mostra o placar, nunca plano completo.
+    - Nível < nivel_detalhe: só mostra placar e motivos.
+    - Nível >= nivel_detalhe e já alertado antes (mesma direção): versão curta.
+    - Nível >= nivel_detalhe e é alerta NOVO: plano completo.
+    """
+    ticker = resultado["ticker"]
+    score = resultado["score"]
+    direcao = resultado["direcao"]
 
-def calcular_estocastico(high, low, close, k_period=14, d_period=3):
-    lowest_low = low.rolling(window=k_period).min()
-    highest_high = high.rolling(window=k_period).max()
-    k = 100 * (close - lowest_low) / (highest_high - lowest_low)
-    d = k.rolling(window=d_period).mean()
-    return k, d
+    if direcao == "neutro":
+        emoji, palavra = "⚪", "NEUTRO"
+    elif direcao == "compra":
+        emoji, palavra = "🟢", "COMPRA"
+    else:
+        emoji, palavra = "🔴", "VENDA"
 
-def calcular_adx(high, low, close, period=14):
-    # Implementação simplificada de ADX para evitar complexidade excessiva sem TA-Lib
-    # Retorna um valor estimado de força de tendência
-    tr1 = high - low
-    tr2 = abs(high - close.shift(1))
-    tr3 = abs(low - close.shift(1))
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    atr = tr.rolling(window=period).mean()
-    
-    # Se o ATR for alto relativo ao preço, considera tendência forte
-    # Isso é uma aproximação para não quebrar o código
-    return atr / close * 1000 # Escala arbitrária para simular "força"
+    cabecalho = f"{emoji} <b>{ticker} — {score}/10 ({palavra})</b>"
+    motivos_txt = "\n".join(f"  • {m}" for m in resultado["motivos"])
 
-# ==============================================================================
-# FUNÇÕES PRINCIPAIS
-# ==============================================================================
+    if direcao == "neutro" or score < nivel_detalhe:
+        return f"{cabecalho}\n{motivos_txt}"
 
-def obter_dados_yahoo(simbolo, periodo='6mo'):
-    """Baixa dados do Yahoo Finance"""
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{simbolo}.SA?interval=1d&range={periodo}"
-    try:
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        if data['chart']['result']:
-            df = pd.DataFrame(data['chart']['result'][0]['indicators']['quote'][0])
-            df['Date'] = pd.to_datetime(data['chart']['result'][0]['timestamp'], unit='s')
-            df.set_index('Date', inplace=True)
-            return df
-        return None
-    except Exception as e:
-        print(f"Erro ao buscar {simbolo}: {e}")
-        return None
+    if not eh_alerta_novo(estado, ticker, score, direcao, nivel_detalhe):
+        data_alerta = estado.get(ticker, {}).get("data_primeiro_alerta", "?")
+        return f"{cabecalho}\n{motivos_txt}\n  ↻ Sinal mantido desde {data_alerta} — plano já enviado, sem novidade."
 
-def analisar_ativo(simbolo):
-    """Analisa um ativo e retorna dicionário com dados técnicos"""
-    df = obter_dados_yahoo(simbolo)
-    if df is None or len(df) < 30:
-        return None
+    # --- A partir daqui: é um alerta NOVO, monta o plano completo ---
+    nome_empresa = config.NOME_EMPRESA.get(ticker, ticker)
+    risco_noticias = checar_risco_noticias(nome_empresa)
 
-    # Cálculos Nativos
-    df['RSI'] = calcular_rsi(df['Close'])
-    df['MA9'] = df['Close'].rolling(window=9).mean()
-    df['MA21'] = df['Close'].rolling(window=21).mean()
-    df['MACD_Line'], df['MACD_Signal'], df['MACD_Hist'] = calcular_macd(df['Close'])
-    df['Stoch_K'], df['Stoch_D'] = calcular_estocastico(df['High'], df['Low'], df['Close'])
-    
-    # Dados atuais
-    ultimo = df.iloc[-1]
-    anterior = df.iloc[-2]
-    
-    # Lógica de Tendência
-    tendencia = "ALTA" if ultimo['Close'] > ultimo['MA21'] else "BAIXA"
-    adx_val = calcular_adx(df['High'], df['Low'], df['Close']).iloc[-1]
-    
-    # Status dos Indicadores
-    rsi_val = ultimo['RSI']
-    rsi_status = "SOBRECOMPRADO" if rsi_val > 70 else "SOBREVENDIDO" if rsi_val < 30 else "NEUTRO"
-    
-    macd_status = "COMPRA" if ultimo['MACD_Line'] > ultimo['MACD_Signal'] else "VENDA"
-    stoch_status = "COMPRA" if ultimo['Stoch_K'] > ultimo['Stoch_D'] else "VENDA"
-    
-    # Volume (Média simples)
-    vol_medio = df['Volume'].rolling(window=20).mean().iloc[-1]
-    vol_status = "ALTO" if ultimo['Volume'] > vol_medio * 1.5 else "NORMAL"
-    
-    # Suporte e Resistência (Máximo e Mínimo dos últimos 20 dias)
-    suporte = df['Low'].rolling(window=20).min().iloc[-1]
-    resistencia = df['High'].rolling(window=20).max().iloc[-1]
-    
-    # Score Simplificado (0 a 10)
-    score = 5.0
-    if tendencia == "ALTA": score += 1.5
-    if macd_status == "COMPRA": score += 1.5
-    if stoch_status == "COMPRA": score += 1.0
-    if rsi_val < 70 and rsi_val > 30: score += 1.0 # Neutro é bom
-    if vol_status == "ALTO": score += 1.0
-    
-    # Penalidades
-    if rsi_val > 80: score -= 2.0
-    if rsi_val < 20: score -= 2.0
-    
-    score = max(0, min(10, score)) # Trava entre 0 e 10
-
-    return {
-        'simbolo': simbolo,
-        'preco_atual': round(ultimo['Close'], 2),
-        'tendencia': tendencia,
-        'adx': round(adx_val, 2),
-        'rsi': round(rsi_val, 2),
-        'rsi_status': rsi_status,
-        'macd_status': macd_status,
-        'stoch_status': stoch_status,
-        'volume_status': vol_status,
-        'suporte': round(suporte, 2),
-        'resistencia': round(resistencia, 2),
-        'score': round(score, 1),
-        'dados_brutos': ultimo # Para uso interno se necessário
-    }
-
-def gerar_mensagem(dados):
-    """Gera o texto formatado para o Telegram"""
-    emoji_tendencia = "🟢" if dados['tendencia'] == "ALTA" else "🔴"
-    emoji_score = "🔥" if dados['score'] >= 7 else "⚠️" if dados['score'] <= 4 else "😐"
-    
-    msg = f"{emoji_tendencia} *{dados['simbolo']}* - R$ {dados['preco_atual']}\n"
-    msg += f"Score: *{dados['score']}/10* {emoji_score}\n"
-    msg += f"Tendência: {dados['tendencia']} | Vol: {dados['volume_status']}\n"
-    msg += f"RSI: {dados['rsi']} ({dados['rsi_status']})\n"
-    msg += f"MACD: {dados['macd_status']} | Estoc: {dados['stoch_status']}\n"
-    msg += f"Suporte: {dados['suporte']} | Res: {dados['resistencia']}"
-    
-    return msg
-
-def enviar_telegram(mensagem):
-    """Envia mensagem para o Telegram"""
-    if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
-        print("❌ Configurações do Telegram ausentes.")
-        return False
-    
-    bot = telebot.TeleBot(config.TELEGRAM_BOT_TOKEN)
-    try:
-        bot.send_message(
-            chat_id=config.TELEGRAM_CHAT_ID, 
-            text=mensagem, 
-            parse_mode="Markdown"
+    if risco_noticias["bloquear_entrada"]:
+        motivo_bloqueio = risco_noticias["alertas"][0]["motivo"]
+        return (
+            f"{cabecalho}\n{motivos_txt}\n"
+            f"  🚫 <b>Plano de entrada CANCELADO</b> — notícia de risco encontrada: {motivo_bloqueio}"
         )
-        print(f"✅ Mensagem enviada: {mensagem[:30]}...")
-        return True
-    except Exception as e:
-        print(f"❌ Erro ao enviar Telegram: {e}")
-        return False
 
-# ==============================================================================
-# EXECUÇÃO PRINCIPAL
-# ==============================================================================
+    resultado_trimestral = checar_resultado_proximo(ticker, config.DIAS_MINIMOS_ANTES_RESULTADO)
+    if resultado_trimestral["tem_resultado_proximo"]:
+        return (
+            f"{cabecalho}\n{motivos_txt}\n"
+            f"  🚫 <b>Plano de entrada CANCELADO</b> — resultado trimestral em "
+            f"{resultado_trimestral['dias_ate_resultado']} dia(s) ({resultado_trimestral['data_resultado']}). "
+            f"Volatilidade imprevisível na véspera/pós-balanço."
+        )
+
+    df = resultado["df"]
+    stop_alvo = sugerir_stop_alvo(df, direcao, atr_mult=atr_mult, risco_retorno=risco_retorno,
+                                   risco_maximo_atr_mult=risco_maximo_atr_mult)
+
+    # --- Revisão com IA (opcional, só roda se ANTHROPIC_API_KEY estiver configurada) ---
+    bloco_ia = ""
+    if getattr(config, "USAR_IA_ANALISE", False) and getattr(config, "GEMINI_API_KEY", ""):
+        resumo_tecnico = montar_resumo_tecnico(resultado, stop_alvo)
+        ia = analisar_com_ia(
+            resumo_tecnico,
+            config.GEMINI_API_KEY,
+            caminho_imagem=caminho_imagem,
+        )
+
+        if ia.get("disponivel"):
+            padrao = ia.get("padrao_grafico", "")
+            padrao_txt = f" | Padrão: <i>{padrao}</i>" if padrao and padrao != "sem padrão claro" else ""
+            if ia["direcao"] != direcao and ia["direcao"] != "neutro":
+                return (
+                    f"{cabecalho}\n{motivos_txt}\n"
+                    f"  🤖 <b>IA discorda do placar técnico{padrao_txt}</b>\n"
+                    f"  Leitura da IA: {ia['direcao'].upper()} (confiança {ia['confianca']}/10)\n"
+                    f"  {ia['analise']}\n"
+                    f"  ⚠️ Plano de entrada NÃO enviado — conflito entre placar e IA. Avalie o gráfico manualmente."
+                )
+            elif ia["direcao"] == "neutro":
+                bloco_ia = (
+                    f"\n  🤖 <b>IA sem convicção{padrao_txt}</b> (confiança {ia['confianca']}/10)\n"
+                    f"  {ia['analise']}\n  Prossiga com cautela extra."
+                )
+            else:
+                bloco_ia = (
+                    f"\n  🤖 <b>IA confirma{padrao_txt}</b> (confiança {ia['confianca']}/10)\n"
+                    f"  {ia['analise']}"
+                )
+        else:
+            bloco_ia = f"\n  🤖 <i>IA indisponível: {ia.get('motivo', 'erro desconhecido')} — usando só o placar técnico.</i>"
+
+    opcao = sugerir_parametros_opcao(resultado["preco"], direcao)
+    posicao = calcular_tamanho_posicao(config.CAPITAL_DISPONIVEL, config.RISCO_POR_OPERACAO_PCT,
+                                        stop_alvo["preco_entrada"], stop_alvo["stop"])
+
+    explicacao_opcao = (
+        "uma CALL é a opção que lucra se o ativo SOBE"
+        if opcao["tipo_opcao"] == "CALL"
+        else "uma PUT é a opção que lucra se o ativo CAI"
+    )
+
+    plano = (
+        f"{cabecalho}\n{motivos_txt}\n"
+        f"  <b>Preço atual:</b> R$ {resultado['preco']:.2f}\n"
+        f"  <b>Plano sugerido:</b> entrar perto de R$ {stop_alvo['preco_entrada']} · "
+        f"sair no prejuízo (stop) se cair a R$ {stop_alvo['stop']} · "
+        f"realizar lucro (alvo) perto de R$ {stop_alvo['alvo']}\n"
+    )
+
+    if posicao.get("quantidade_acoes", 0) > 0:
+        plano += (
+            f"  <b>Tamanho sugerido:</b> {posicao['quantidade_acoes']} ações "
+            f"(≈ R$ {posicao['valor_posicao']}), arriscando R$ {posicao['valor_em_risco']} "
+            f"({posicao['pct_capital_em_risco']}% do capital)\n"
+        )
+    else:
+        plano += "  <b>Tamanho sugerido:</b> risco por ação muito alto pro seu capital/risco configurado — reveja o setup.\n"
+
+    plano += (
+        f"  <b>Opção sugerida:</b> {opcao['tipo_opcao']}, strike próximo de "
+        f"R$ {opcao['strike_sugerido_aprox']}, vencimento {opcao['vencimento_sugerido']} "
+        f"— {explicacao_opcao}.\n"
+        f"  ⚠️ Confira a liquidez dessa opção no seu home broker antes de operar."
+        f"{bloco_ia}"
+    )
+
+    if risco_noticias["positivas"]:
+        plano += f"\n  ✅ Notícia recente favorável: {risco_noticias['positivas'][0]['titulo']}"
+
+    return plano
+
+
+def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
+                              arquivo_estado="estado.json", atr_mult: float = 1.5,
+                              risco_retorno: float = 2.0, titulo: str = "Relatório B3",
+                              nota_extra: str = "", usar_curto_prazo: bool = False,
+                              projetar_volume: bool = False, confirmar_intradiario: bool = False,
+                              risco_maximo_atr_mult: float = None,
+                              margem_saida_estado: int = None):
+    watchlist = watchlist or config.WATCHLIST
+    periodo = periodo or config.PERIODO_HISTORICO
+    nivel_detalhe = nivel_detalhe if nivel_detalhe is not None else config.NIVEL_DETALHE
+    risco_maximo_atr_mult = risco_maximo_atr_mult if risco_maximo_atr_mult is not None else config.RISCO_MAXIMO_ATR_MULT
+    margem_saida_estado = margem_saida_estado if margem_saida_estado is not None else config.MARGEM_SAIDA_ESTADO
+
+    print(f"[{titulo}] Rodando screener...")
+    resultados = rodar_screener(watchlist=watchlist, periodo=periodo,
+                                 usar_curto_prazo=usar_curto_prazo, projetar_volume=projetar_volume,
+                                 confirmar_intradiario=confirmar_intradiario)
+    hoje = date.today().strftime("%d/%m/%Y")
+
+    if not resultados:
+        enviar_mensagem(
+            config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID,
+            f"📊 <b>{titulo} — {hoje}</b>\nNão consegui baixar dados de nenhum ativo hoje."
+        )
+        print("Nenhum resultado. Mensagem enviada.")
+        return
+
+    print("Gerando gráficos...")
+    os.makedirs(PASTA_GRAFICOS, exist_ok=True)
+    caminhos_graficos = []
+    for r in resultados:
+        caminho = os.path.join(PASTA_GRAFICOS, f"{r['ticker']}_{arquivo_estado.replace('.json','')}.png")
+        plotar_grafico(r["df"], r["ticker"], caminho)
+        caminhos_graficos.append(caminho)
+
+    print("Carregando estado (histórico de alertas)...")
+    estado = carregar_estado(arquivo_estado)
+
+    print("Checando notícias/calendário e montando resumo...")
+    blocos = []
+    for r in resultados:
+        caminho = os.path.join(PASTA_GRAFICOS, f"{r['ticker']}_{arquivo_estado.replace('.json','')}.png")
+        blocos.append(montar_bloco_resumo(r, estado, nivel_detalhe, atr_mult=atr_mult,
+                                           risco_retorno=risco_retorno,
+                                           risco_maximo_atr_mult=risco_maximo_atr_mult,
+                                           margem_saida_estado=margem_saida_estado,
+                                           caminho_imagem=caminho))
+        estado = atualizar_estado(estado, r["ticker"], r["score"], r["direcao"], nivel_detalhe,
+                                   margem_saida=margem_saida_estado)
+
+    salvar_estado(estado, arquivo_estado)
+
+    cabecalho_msg = f"📊 <b>{titulo} — {hoje}</b>\n"
+    if nota_extra:
+        cabecalho_msg += f"{nota_extra}\n"
+    cabecalho_msg += (
+        f"Ranking de {len(resultados)} ativo(s), do nível mais alto pro mais baixo.\n"
+        f"Plano de entrada completo só a partir de {nivel_detalhe}/10, e só na primeira "
+        f"vez que o sinal aparece (sem repetir todo dia).\n\n"
+    )
+
+    mensagem_final = (
+        cabecalho_msg
+        + "\n\n".join(blocos)
+        + "\n\n⚠️ Apoio técnico automatizado, não é recomendação de investimento. "
+          "Confirme liquidez da opção e valide com sua própria gestão de risco."
+    )
+
+    print("Enviando álbum de gráficos...")
+    enviar_album(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, caminhos_graficos)
+
+    print("Enviando resumo em texto...")
+    LIMITE = 3800
+    if len(mensagem_final) <= LIMITE:
+        enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, mensagem_final)
+    else:
+        partes = []
+        atual = ""
+        for bloco in mensagem_final.split("\n\n"):
+            if len(atual) + len(bloco) + 2 > LIMITE:
+                partes.append(atual)
+                atual = bloco
+            else:
+                atual = f"{atual}\n\n{bloco}" if atual else bloco
+        if atual:
+            partes.append(atual)
+        for parte in partes:
+            enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, parte)
+
+    print(f"[{titulo}] Relatório enviado com sucesso.")
+
 
 if __name__ == "__main__":
-    print("🚀 Iniciando B3 Swing Analyzer...")
-    
-    # Verifica configurações básicas
-    if not config.verificar_configuracoes():
-        print("⛔ Parando devido a erros de configuração.")
-        sys.exit(1)
-
-    watchlist = config.WATCHLIST
-    msg_geral = f"📊 *Relatório Diário B3* ({datetime.now().strftime('%d/%m')})\n\n"
-    msg_geral += f"Analisando {len(watchlist)} ativos...\n"
-    msg_geral += "-" * 30 + "\n"
-    
-    analises_ia = []
-
-    for ativo in watchlist:
-        print(f"Analisando {ativo}...")
-        dados = analisar_ativo(ativo)
-        
-        if dados:
-            # Adiciona ao resumo geral
-            msg_geral += gerar_mensagem(dados) + "\n\n"
-            
-            # Se o score for alto, chama a IA e prepara mensagem separada
-            if dados['score'] >= 6.0:
-                print(f"🤖 Enviando {ativo} para IA...")
-                analise_ia = analisar_com_ia(dados, ativo)
-                
-                if analise_ia:
-                    msg_ia = f"🤖 *IA - {ativo}*\n"
-                    msg_ia += f"Direção: *{analise_ia.get('direcao')}* (Confiança: {analise_ia.get('confianca')}/10)\n"
-                    msg_ia += f"Qualidade: {analise_ia.get('qualidade')} | ⏰ Timing: {analise_ia.get('timing')}\n"
-                    msg_ia += f"Padrão: {analise_ia.get('padrao')}\n\n"
-                    msg_ia += f"📌 *Análise:* {analise_ia.get('analise')}\n"
-                    msg_ia += f"⚠️ *Riscos:* {analise_ia.get('riscos')}"
-                    analises_ia.append(msg_ia)
-        else:
-            msg_geral += f"❌ Falha ao analisar {ativo}\n\n"
-            
-        time.sleep(1) # Respeito à API do Yahoo
-
-    # Envia Resumo Geral
-    if len(msg_geral) > 4000:
-        # Divide se for muito longo (simples)
-        enviar_telegram(msg_geral[:4000])
-        enviar_telegram(msg_geral[4000:])
-    else:
-        enviar_telegram(msg_geral)
-    
-    # Envia Análises da IA (Mensagens Separadas)
-    time.sleep(2)
-    for msg_ia in analises_ia:
-        enviar_telegram(msg_ia)
-        time.sleep(1) # Evita flood do Telegram
-
-    print("✅ Processo finalizado.")
+    gerar_e_enviar_relatorio(
+        watchlist=config.WATCHLIST,
+        periodo=config.PERIODO_HISTORICO,
+        nivel_detalhe=config.NIVEL_DETALHE,
+        arquivo_estado="estado.json",
+        titulo="Relatório B3 — Manhã",
+    )
