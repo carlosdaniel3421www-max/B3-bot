@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import yfinance as yf
 # ... resto do código
 """
 B3 Swing Trade Analyzer
