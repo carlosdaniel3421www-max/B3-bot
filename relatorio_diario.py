@@ -188,15 +188,57 @@ ia = analisador.analyze_asset(
 )
 
 
-        if ia:
+    ia = analisador.analyze_asset(
 
-            bloco_ia = (
-                "\n\n"
-                +
-                analisador.format_telegram_message(
-                    ia
-                )
+        ticker=ticker,
+
+        current_price=float(resultado["preco_atual"]),
+
+        ema21=float(
+            df["close"]
+            .ewm(span=21, adjust=False)
+            .mean()
+            .iloc[-1]
+        ),
+
+        ema200=float(
+            df["close"]
+            .ewm(span=200, adjust=False)
+            .mean()
+            .iloc[-1]
+        ),
+
+        rsi=float(ultimo["rsi"]),
+        macd=float(ultimo["macd"]),
+        volume=float(ultimo["volume"]),
+        atr=float(ultimo["atr"]),
+
+        support=float(ultimo["suporte"]),
+        resistance=float(ultimo["resistencia"]),
+
+        score=score,
+        direction=direcao,
+
+        reasons=resultado["motivos"],
+
+        news=risco_noticias.get(
+            "noticias",
+            []
+        ),
+
+        chart_path=caminho_imagem
+    )
+
+
+    if ia:
+
+        bloco_ia = (
+            "\n\n"
+            +
+            analisador.format_telegram_message(
+                ia
             )
+        )
 
         if ia.get("disponivel"):
             padrao = ia.get("padrao_grafico", "")
