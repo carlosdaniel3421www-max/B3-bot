@@ -18,6 +18,28 @@ OPLAB_TOKEN = os.environ.get("OPLAB_TOKEN", "")  # deixe vazio se não tiver
 # Plano GRATUITO (sem prazo de validade): aistudio.google.com -> Get API Key
 # Sem chave configurada, o robô usa só o placar técnico (não quebra nada).
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+# ==============================
+# CONFIGURAÇÃO GEMINI IA
+# ==============================
+
+GEMINI_MODEL = os.environ.get(
+    "GEMINI_MODEL",
+    "gemini-2.5-flash"
+)
+
+GEMINI_TIMEOUT_SECONDS = int(
+    os.environ.get(
+        "GEMINI_TIMEOUT_SECONDS",
+        "45"
+    )
+)
+
+GEMINI_MAX_RETRIES = int(
+    os.environ.get(
+        "GEMINI_MAX_RETRIES",
+        "3"
+    )
+)
 USAR_IA_ANALISE = True
 
 # --- Screener ---
