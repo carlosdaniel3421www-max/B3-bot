@@ -3,7 +3,7 @@ name: B3 Swing Analyzer
 on:
   schedule:
     - cron: '0 9 * * 1-5' # Seg a Sex às 09:00 UTC (06:00 BR)
-  workflow_dispatch:      # Permite rodar manualmente
+  workflow_dispatch:
 
 jobs:
   analyze:
@@ -16,7 +16,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.9'
 
       - name: Install Dependencies
         run: |
