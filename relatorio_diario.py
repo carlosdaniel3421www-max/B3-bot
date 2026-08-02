@@ -96,14 +96,111 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
                                    risco_maximo_atr_mult=risco_maximo_atr_mult)
 
     # --- Revisão com IA (opcional, só roda se ANTHROPIC_API_KEY estiver configurada) ---
+    # --- Análise complementar Gemini ---
     bloco_ia = ""
-    if getattr(config, "USAR_IA_ANALISE", False) and getattr(config, "GEMINI_API_KEY", ""):
-        resumo_tecnico = montar_resumo_tecnico(resultado, stop_alvo)
-        ia = analisar_com_ia(
-            resumo_tecnico,
-            config.GEMINI_API_KEY,
-            caminho_imagem=caminho_imagem,
+
+    if (
+        getattr(config, "USAR_IA_ANALISE", False)
+        and getattr(config, "GEMINI_API_KEY", "")
+    ):
+
+        ultimo = df.iloc[-1]
+
+        analisador = AIAnalyzer(
+            api_key=config.GEMINI_API_KEY,
+            model=getattr(
+                config,
+                "GEMINI_MODEL",
+                None
+            ),
+            timeout_seconds=getattr(
+                config,
+                "GEMINI_TIMEOUT_SECONDS",
+                45
+            ),
+            max_retries=getattr(
+                config,
+                "GEMINI_MAX_RETRIES",
+                3
+            ),
         )
+
+
+        ia = analisador.analyze_asset(
+
+            ticker=ticker,
+
+            current_price=float(
+                resultado["preco"]
+            ),
+
+            ema21=float(
+                df["ema21"].iloc[-1]
+                if "ema21" in df.columns
+                else df["close"].ewm(span=21).mean().iloc[-1]
+            ),
+
+            ema200=float(
+                df["ema200"].iloc[-1]
+                if "ema200" in df.columns
+                else df["close"].ewm(span=200).mean().iloc[-1]
+            ),
+
+            rsi=float(
+                ultimo["rsi"]
+            ),
+
+            macd=float(
+                ultimo["macd"]
+            ),
+
+            volume=float(
+                ultimo["volume"]
+            ),
+
+            atr=float(
+                ultimo["atr"]
+            ),
+
+            support=float(
+                stop_alvo.get(
+                    "suporte",
+                    resultado["preco"]
+                )
+            ),
+
+            resistance=float(
+                stop_alvo.get(
+                    "resistencia",
+                    resultado["preco"]
+                )
+            ),
+
+            score=score,
+
+            direction=direcao,
+
+            reasons=resultado["motivos"],
+
+            news=risco_noticias.get(
+                "noticias",
+                []
+            ),
+
+            chart_path=caminho_imagem
+
+        )
+
+
+        if ia:
+
+            bloco_ia = (
+                "\n\n"
+                +
+                analisador.format_telegram_message(
+                    ia
+                )
+            )
 
         if ia.get("disponivel"):
             padrao = ia.get("padrao_grafico", "")
