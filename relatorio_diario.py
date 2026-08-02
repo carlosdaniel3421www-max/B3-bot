@@ -140,11 +140,19 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
                 else df["close"].ewm(span=21).mean().iloc[-1]
             ),
 
-            ema200=float(
-                df["ema200"].iloc[-1]
-                if "ema200" in df.columns
-                else df["close"].ewm(span=200).mean().iloc[-1]
-            ),
+ema21=float(
+    df["close"]
+    .ewm(span=21, adjust=False)
+    .mean()
+    .iloc[-1]
+),
+
+ema200=float(
+    df["close"]
+    .ewm(span=200, adjust=False)
+    .mean()
+    .iloc[-1]
+),
 
             rsi=float(
                 ultimo["rsi"]
