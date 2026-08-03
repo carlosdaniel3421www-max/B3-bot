@@ -689,42 +689,102 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
 # --------------------------------------------------------------------------
 
 def plotar_grafico(df: pd.DataFrame, ticker: str, caminho_saida: str):
+    """
+    Gera gráfico de CANDLESTICK com mplfinance.
+    Painéis: Candles + SMA21/50/200 + Suporte/Resistência | Volume | RSI | MACD
+    """
+    try:
+        import mplfinance as mpf
+        import matplotlib.pyplot as plt
+
+        # Prepara DataFrame no formato que mplfinance exige
+        df_mpf = df[["open", "high", "low", "close", "volume"]].copy()
+        df_mpf.columns = ["Open", "High", "Low", "Close", "Volume"]
+        df_mpf.index = pd.DatetimeIndex(df_mpf.index)
+
+        def safe(s, default=0):
+            return s.bfill().ffill().fillna(default)
+
+        preco_ref = float(df["close"].iloc[-1])
+
+        plots_extras = [
+            mpf.make_addplot(safe(df["sma21"], preco_ref), color="#ff7f0e", width=1.2),
+            mpf.make_addplot(safe(df["sma50"], preco_ref), color="#2ca02c", width=1.0),
+            mpf.make_addplot(safe(df["sma200"],preco_ref), color="#d62728", width=0.8),
+            mpf.make_addplot(safe(df["suporte"],  preco_ref), color="green", linestyle=":", width=0.8),
+            mpf.make_addplot(safe(df["resistencia"], preco_ref), color="red",  linestyle=":", width=0.8),
+            mpf.make_addplot(safe(df["rsi"], 50),         panel=1, color="blue",   width=0.9, ylabel="RSI"),
+            mpf.make_addplot([70] * len(df),              panel=1, color="red",    linestyle="--", width=0.5),
+            mpf.make_addplot([30] * len(df),              panel=1, color="green",  linestyle="--", width=0.5),
+            mpf.make_addplot(safe(df["macd"]),            panel=2, color="blue",   width=0.9, ylabel="MACD"),
+            mpf.make_addplot(safe(df["macd_sinal"]),      panel=2, color="orange", width=0.9),
+        ]
+
+        mc = mpf.make_marketcolors(
+            up="green", down="red",
+            volume="in",
+            wick={"up": "green", "down": "red"},
+        )
+        estilo = mpf.make_mpf_style(
+            marketcolors=mc,
+            gridstyle="--",
+            gridcolor="#e0e0e0",
+            facecolor="white",
+        )
+
+        fig, _ = mpf.plot(
+            df_mpf,
+            type="candle",
+            style=estilo,
+            volume=True,
+            addplot=plots_extras,
+            panel_ratios=(4, 1, 1),
+            figsize=(14, 10),
+            title=f"\n{ticker} — Análise Técnica (Swing Trade)",
+            returnfig=True,
+            warn_too_much_data=300,
+        )
+        fig.savefig(caminho_saida, dpi=130, bbox_inches="tight")
+        plt.close(fig)
+
+    except Exception as e:
+        # Fallback pro gráfico de linhas se mplfinance falhar por qualquer motivo
+        print(f"[aviso] mplfinance falhou ({e}), usando gráfico de linhas como fallback")
+        _plotar_grafico_linhas(df, ticker, caminho_saida)
+
+
+def _plotar_grafico_linhas(df: pd.DataFrame, ticker: str, caminho_saida: str):
+    """Gráfico de linhas — fallback caso mplfinance não esteja disponível."""
     fig, eixos = plt.subplots(
         4, 1, figsize=(14, 12), sharex=True,
         gridspec_kw={"height_ratios": [3, 1, 1, 1]}
     )
     ax_preco, ax_vol, ax_rsi_stoch, ax_macd = eixos
 
-    # --- Preço + médias + suporte/resistência ---
     ax_preco.plot(df.index, df["close"], label="Fechamento", color="black", linewidth=1.2)
-    ax_preco.plot(df.index, df["sma9"], label="SMA9", color="#1f77b4", linewidth=0.9)
     ax_preco.plot(df.index, df["sma21"], label="SMA21", color="#ff7f0e", linewidth=0.9)
     ax_preco.plot(df.index, df["sma50"], label="SMA50", color="#2ca02c", linewidth=0.9)
     ax_preco.plot(df.index, df["sma200"], label="SMA200", color="#d62728", linewidth=0.9)
-    ax_preco.plot(df.index, df["vwap"], label="VWAP (20)", color="purple", linewidth=0.8, linestyle="--")
-    ax_preco.plot(df.index, df["resistencia"], label="Resistência (20d)", color="red", linewidth=0.7, linestyle=":")
-    ax_preco.plot(df.index, df["suporte"], label="Suporte (20d)", color="green", linewidth=0.7, linestyle=":")
+    ax_preco.plot(df.index, df["resistencia"], label="Resist.", color="red",   linewidth=0.7, linestyle=":")
+    ax_preco.plot(df.index, df["suporte"],     label="Suporte", color="green", linewidth=0.7, linestyle=":")
     ax_preco.set_title(f"{ticker} — Análise Técnica (Swing Trade)")
     ax_preco.legend(loc="upper left", fontsize=8, ncol=4)
     ax_preco.grid(alpha=0.3)
 
-    # --- Volume ---
     cores_vol = np.where(df["close"] >= df["close"].shift(1), "green", "red")
     ax_vol.bar(df.index, df["volume"], color=cores_vol, alpha=0.6, width=1)
     ax_vol.set_ylabel("Volume")
     ax_vol.grid(alpha=0.3)
 
-    # --- RSI + Estocástico ---
-    ax_rsi_stoch.plot(df.index, df["rsi"], label="RSI(14)", color="blue", linewidth=0.9)
-    ax_rsi_stoch.plot(df.index, df["stoch_k"], label="%K Estocástico", color="orange", linewidth=0.7)
-    ax_rsi_stoch.axhline(70, color="red", linestyle="--", linewidth=0.6)
+    ax_rsi_stoch.plot(df.index, df["rsi"],    label="RSI(14)", color="blue",   linewidth=0.9)
+    ax_rsi_stoch.plot(df.index, df["stoch_k"],label="Estoc.",  color="orange", linewidth=0.7)
+    ax_rsi_stoch.axhline(70, color="red",   linestyle="--", linewidth=0.6)
     ax_rsi_stoch.axhline(30, color="green", linestyle="--", linewidth=0.6)
-    ax_rsi_stoch.set_ylabel("RSI / Estocástico")
+    ax_rsi_stoch.set_ylabel("RSI / Estoc.")
     ax_rsi_stoch.legend(loc="upper left", fontsize=8)
     ax_rsi_stoch.grid(alpha=0.3)
 
-    # --- MACD ---
-    ax_macd.plot(df.index, df["macd"], label="MACD", color="blue", linewidth=0.9)
+    ax_macd.plot(df.index, df["macd"],       label="MACD",  color="blue",   linewidth=0.9)
     ax_macd.plot(df.index, df["macd_sinal"], label="Sinal", color="orange", linewidth=0.9)
     cores_hist = np.where(df["macd_hist"] >= 0, "green", "red")
     ax_macd.bar(df.index, df["macd_hist"], color=cores_hist, alpha=0.5, width=1)
@@ -736,6 +796,7 @@ def plotar_grafico(df: pd.DataFrame, ticker: str, caminho_saida: str):
     plt.tight_layout()
     plt.savefig(caminho_saida, dpi=130)
     plt.close(fig)
+
 
 
 # --------------------------------------------------------------------------
