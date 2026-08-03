@@ -13,5 +13,20 @@
     "score": 6,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-03"
+  },
+  "GGBR4": {
+    "score": 8,
+    "direcao": "compra",
+    "data_primeiro_alerta": "2026-08-03"
+  },
+  "BBAS3": {
+    "score": 6,
+    "direcao": "compra",
+    "data_primeiro_alerta": "2026-08-03"
+  },
+  "SUZB3": {
+    "score": 6,
+    "direcao": "compra",
+    "data_primeiro_alerta": "2026-08-03"
   }
 }
