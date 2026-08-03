@@ -210,9 +210,10 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
             resultado_ia = None
 
         if resultado_ia is None:
+            motivo = getattr(analisador, "ultimo_erro", None) or "motivo desconhecido"
             blocos_ia.append(
-                f"⚠️ <b>{ticker}</b> — IA indisponível no momento "
-                f"(o placar técnico acima já é válido e não depende da IA)."
+                f"⚠️ <b>{ticker}</b> — IA indisponível ({motivo}).\n"
+                f"O placar técnico acima já é válido e não depende da IA."
             )
         else:
             blocos_ia.append(

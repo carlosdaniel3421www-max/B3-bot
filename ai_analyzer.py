@@ -65,6 +65,13 @@ class AIAnalyzer:
 
         self._client = None
 
+        # Guarda o motivo real da última falha (status HTTP, tipo de exceção,
+        # mensagem). None enquanto tudo estiver funcionando. Quem chama
+        # analyze_asset() pode ler isso depois de um retorno None para saber
+        # exatamente por que a IA ficou indisponível, em vez de um
+        # "erro genérico" sem causa.
+        self.ultimo_erro: Optional[str] = None
+
 
 
     def _get_client(self):
@@ -87,6 +94,8 @@ class AIAnalyzer:
 
 
         except Exception as e:
+
+            self.ultimo_erro = f"Falha ao criar cliente Gemini ({type(e).__name__}): {e}"
 
             logger.error(
                 "Erro criando cliente Gemini: %s",
@@ -141,7 +150,11 @@ class AIAnalyzer:
         """
 
 
+        self.ultimo_erro = None
+
         if not self.api_key:
+
+            self.ultimo_erro = "Sem GEMINI_API_KEY configurada (verifique o secret no GitHub Actions)"
 
             logger.warning(
                 "Gemini sem API KEY"
@@ -155,6 +168,9 @@ class AIAnalyzer:
 
 
         if not client:
+
+            if not self.ultimo_erro:
+                self.ultimo_erro = "Não foi possível criar o cliente Gemini (verifique se o pacote google-genai está instalado)"
 
             return None
 
@@ -202,6 +218,11 @@ class AIAnalyzer:
                         direction
                     )
 
+                self.ultimo_erro = (
+                    f"Tentativa {attempt}/{self.max_retries}: Gemini respondeu, "
+                    f"mas sem JSON válido (ver logs para o texto bruto)"
+                )
+
 
             except Exception as e:
 
@@ -209,6 +230,11 @@ class AIAnalyzer:
                     getattr(e, "code", None)
                     or getattr(e, "status_code", None)
                     or getattr(e, "status", None)
+                )
+
+                self.ultimo_erro = (
+                    f"Tentativa {attempt}/{self.max_retries} falhou "
+                    f"(status={codigo_http}, tipo={type(e).__name__}): {e}"
                 )
 
                 logger.warning(
@@ -226,6 +252,9 @@ class AIAnalyzer:
                 time.sleep(attempt)
 
 
+
+        if not self.ultimo_erro:
+            self.ultimo_erro = "Gemini não retornou resposta utilizável após todas as tentativas"
 
         return None
         
@@ -1071,120 +1100,71 @@ Dados do robô:
     ) -> str:
 
         """
-        Formata a análise da IA para envio no Telegram.
+        Formata a análise da IA para envio no Telegram, em bullets diretos
+        (concordância, entrada ideal, strike, stop, alvo, motivo) — o mesmo
+        JSON de sempre, só a apresentação é mais enxuta.
         """
-
 
         if not result:
 
-            return (
-                "🤖 <b>ANÁLISE DA IA</b>\n"
-                "IA indisponível."
-            )
+            return "IA indisponível."
 
+        operacao = result.get("operacao", "N/A")
 
+        concorda = result.get("concorda_com_robo", False)
+        vale_operar = result.get("vale_operar", False)
 
-        operacao = result.get(
-            "operacao",
-            "N/A"
-        )
+        linhas = []
 
+        # --- concordância com o robô ---
+        if concorda:
+            linhas.append("✅ Concordo com o sinal do robô.")
+        else:
+            linhas.append("❌ Discordo do sinal do robô.")
 
-        emoji = (
-            "🟢"
-            if operacao == "CALL"
-            else "🔴"
-        )
+        if not vale_operar:
+            linhas.append("⚠️ Na minha leitura, não vale operar agora.")
 
+        # --- plano de entrada ---
+        setup = result.get("setup", "")
+        entrada = result.get("preco_ideal_entrada", "")
+        if entrada:
+            sufixo_setup = f" ({setup})" if setup else ""
+            linhas.append(f"💰 Entrada ideal: R$ {entrada}{sufixo_setup}")
 
+        strike = result.get("strike_sugerido", "")
+        if strike:
+            tempo = result.get("tempo_estimado", "")
+            sufixo_tempo = f" ({tempo})" if tempo else ""
+            linhas.append(f"📈 Strike sugerido: {operacao} {strike}{sufixo_tempo}")
 
-        linhas = [
+        stop = result.get("stop", "")
+        if stop:
+            linhas.append(f"🛑 Stop: R$ {stop}")
 
-            "🤖 <b>ANÁLISE DA IA</b>",
+        alvo = result.get("alvo", "")
+        if alvo:
+            linhas.append(f"🎯 Alvo: R$ {alvo}")
 
-            "",
+        risco = result.get("risco", "")
+        confianca = result.get("confianca", 0)
+        if risco:
+            linhas.append(f"⚠️ Risco: {risco} (confiança da IA: {confianca}%)")
 
-            f"{emoji} Operação: <b>{operacao}</b>",
+        # --- motivo (o "porquê" — o mais importante pra decisão) ---
+        explicacao = result.get("explicacao", "")
+        if explicacao:
+            linhas.append(f"🧠 {explicacao}")
 
-            f"📊 Setup: {result.get('setup','')}",
+        for item in result.get("pontos_fortes", []):
+            linhas.append(f"  + {item}")
 
-            f"🎯 Confiança: {result.get('confianca',0)}%",
-
-            f"💰 Entrada ideal: {result.get('preco_ideal_entrada','')}",
-
-            f"📈 Strike: {result.get('strike_sugerido','')}",
-
-            f"🛑 Stop: {result.get('stop','')}",
-
-            f"🎯 Alvo: {result.get('alvo','')}",
-
-            f"⏳ Tempo estimado: {result.get('tempo_estimado','')}",
-
-            f"⚠️ Risco: {result.get('risco','')}",
-
-            "",
-
-            "<b>Resumo:</b>",
-
-            result.get(
-                "explicacao",
-                ""
-            )
-
-        ]
-
-
-
-        fortes = result.get(
-            "pontos_fortes",
-            []
-        )
-
-
-        if fortes:
-
-            linhas.append(
-                ""
-            )
-
-            linhas.append(
-                "<b>Pontos fortes:</b>"
-            )
-
-            for item in fortes:
-
-                linhas.append(
-                    f"✅ {item}"
-                )
-
-
-
-        fracos = result.get(
-            "pontos_fracos",
-            []
-        )
-
-
-        if fracos:
-
-            linhas.append(
-                ""
-            )
-
-            linhas.append(
-                "<b>Pontos fracos:</b>"
-            )
-
-            for item in fracos:
-
-                linhas.append(
-                    f"⚠️ {item}"
-                )
-
-
+        for item in result.get("pontos_fracos", []):
+            linhas.append(f"  – {item}")
 
         return "\n".join(
-            linhas
+            l if l.startswith("  ") else f"• {l}"
+            for l in linhas
         )
 
 
