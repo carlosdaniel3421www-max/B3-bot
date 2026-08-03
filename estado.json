@@ -5,7 +5,7 @@
     "data_primeiro_alerta": "2026-08-01"
   },
   "USIM5": {
-    "score": 7,
+    "score": 6,
     "direcao": "venda",
     "data_primeiro_alerta": "2026-08-01"
   },
@@ -14,24 +14,14 @@
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-01"
   },
-  "RAIL3": {
-    "score": 6,
-    "direcao": "compra",
-    "data_primeiro_alerta": "2026-08-01"
-  },
-  "JBSS32": {
-    "score": 8,
-    "direcao": "compra",
-    "data_primeiro_alerta": "2026-08-02"
-  },
   "SUZB3": {
     "score": 6,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-02"
   },
-  "CMIG4": {
+  "WEGE3": {
     "score": 6,
     "direcao": "compra",
-    "data_primeiro_alerta": "2026-08-02"
+    "data_primeiro_alerta": "2026-08-03"
   }
 }
