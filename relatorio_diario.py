@@ -221,7 +221,7 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
                 f"{analisador.format_telegram_message(resultado_ia)}"
             )
 
-        time.sleep(4)  # respeita o limite de 15 chamadas/minuto do plano gratuito
+        time.sleep(8)  # respeita o limite de requisições/minuto do plano gratuito
 
     if not blocos_ia:
         return ""

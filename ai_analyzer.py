@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 
 from pathlib import Path
@@ -44,7 +45,17 @@ class AIAnalyzer:
     """
 
 
-    DEFAULT_MODEL = "gemini-2.5-flash"
+    DEFAULT_MODEL = "gemini-2.5-flash-lite"
+
+    # Modelos alternativos, tentados em ordem se o modelo principal
+    # devolver 404 (NOT_FOUND — comum quando a Google descontinua/restringe
+    # um modelo). Mantém o robô funcionando mesmo se o nome do modelo
+    # configurado parar de existir de um dia pro outro.
+    MODELOS_FALLBACK = (
+        "gemini-2.5-flash-lite",
+        "gemini-flash-lite-latest",
+        "gemini-2.0-flash-lite",
+    )
 
 
     def __init__(
@@ -200,14 +211,20 @@ class AIAnalyzer:
         )
 
 
+        modelos_para_tentar = list(dict.fromkeys([self.model, *self.MODELOS_FALLBACK]))
+        indice_modelo = 0
+
         for attempt in range(1, self.max_retries + 1):
+
+            modelo_atual = modelos_para_tentar[min(indice_modelo, len(modelos_para_tentar) - 1)]
 
             try:
 
                 response = self._call_gemini(
                     client,
                     prompt,
-                    chart_path
+                    chart_path,
+                    modelo=modelo_atual,
                 )
 
 
@@ -219,7 +236,7 @@ class AIAnalyzer:
                     )
 
                 self.ultimo_erro = (
-                    f"Tentativa {attempt}/{self.max_retries}: Gemini respondeu, "
+                    f"Tentativa {attempt}/{self.max_retries} ({modelo_atual}): Gemini respondeu, "
                     f"mas sem JSON válido (ver logs para o texto bruto)"
                 )
 
@@ -233,28 +250,63 @@ class AIAnalyzer:
                 )
 
                 self.ultimo_erro = (
-                    f"Tentativa {attempt}/{self.max_retries} falhou "
+                    f"Tentativa {attempt}/{self.max_retries} ({modelo_atual}) falhou "
                     f"(status={codigo_http}, tipo={type(e).__name__}): {e}"
                 )
 
                 logger.warning(
-                    "Tentativa %s/%s de chamada ao Gemini falhou "
+                    "Tentativa %s/%s (%s) de chamada ao Gemini falhou "
                     "(status=%s, tipo=%s): %s",
                     attempt,
                     self.max_retries,
+                    modelo_atual,
                     codigo_http,
                     type(e).__name__,
                     e,
                     exc_info=True,
                 )
 
+                eh_modelo_indisponivel = str(codigo_http) == "404" or "NOT_FOUND" in str(e)
 
-                time.sleep(attempt)
+                if eh_modelo_indisponivel and indice_modelo < len(modelos_para_tentar) - 1:
+                    indice_modelo += 1
+                    logger.warning(
+                        "Modelo %s indisponível, tentando %s na próxima chamada",
+                        modelo_atual,
+                        modelos_para_tentar[indice_modelo],
+                    )
+                    continue  # tenta o próximo modelo imediatamente, sem esperar
+
+                atraso = self._extrair_delay_retry(e)
+                if atraso is None:
+                    atraso = attempt * 2
+
+                time.sleep(min(atraso, 65))
 
 
 
         if not self.ultimo_erro:
             self.ultimo_erro = "Gemini não retornou resposta utilizável após todas as tentativas"
+
+        return None
+
+    @staticmethod
+    def _extrair_delay_retry(erro: Exception) -> Optional[float]:
+        """
+        Extrai o tempo de espera real sugerido pelo Google num erro 429
+        (RESOURCE_EXHAUSTED), ex: "Please retry in 56.99s" ou
+        retryDelay: "56s". Retorna None se não encontrar nada — nesse
+        caso quem chama usa um backoff padrão.
+        """
+        texto = str(erro)
+
+        match = re.search(r"retry in ([\d.]+)\s*s", texto, re.IGNORECASE)
+        if match:
+            return float(match.group(1))
+
+        match = re.search(r"retryDelay['\"]?\s*:\s*['\"]?([\d.]+)\s*s", texto, re.IGNORECASE)
+        if match:
+            return float(match.group(1))
 
         return None
         
@@ -587,6 +639,7 @@ Dados do robô:
         client: Any,
         prompt: str,
         chart_path: Optional[str | Path] = None,
+        modelo: Optional[str] = None,
 
     ) -> Optional[dict[str, Any]]:
 
@@ -667,7 +720,7 @@ Dados do robô:
 
             resposta = client.models.generate_content(
 
-                model=self.model,
+                model=modelo or self.model,
 
                 contents=[
 
