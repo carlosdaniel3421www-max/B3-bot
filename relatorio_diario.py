@@ -12,6 +12,8 @@ Relatório Diário — orquestra tudo:
 """
 
 import os
+import time
+import logging
 from datetime import date
 
 import config
@@ -21,9 +23,17 @@ from opcoes import sugerir_parametros_opcao
 from calendario import checar_resultado_proximo
 from gestao_risco import calcular_tamanho_posicao
 from estado import carregar_estado, salvar_estado, eh_alerta_novo, atualizar_estado
-from ia_analise import analisar_ativo_visualmente, formatar_analise_ia
+from ai_analyzer import AIAnalyzer
 from b3_swing_analyzer import sugerir_stop_alvo, plotar_grafico
 from telegram_utils import enviar_mensagem, enviar_album
+
+# Garante que os logs de erro do ai_analyzer.py (status HTTP, mensagem,
+# stacktrace) apareçam no console/log do GitHub Actions. Não interfere em
+# nenhum print() já existente no projeto.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 
 PASTA_GRAFICOS = "graficos_tmp"
 SCORE_MINIMO_IA = 4  # IA analisa todos os ativos com score >= esse valor
@@ -117,19 +127,45 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
     return plano
 
 
-def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
-    """
-    Roda a IA em todos os ativos com score >= SCORE_MINIMO_IA e monta
-    uma mensagem consolidada com "por que entrar / por que não entrar".
-    Sempre roda, independente de estado ou alertas anteriores.
-    """
+def _montar_analisador_ia() -> AIAnalyzer | None:
+    """Cria o AIAnalyzer (Gemini) se USAR_IA_ANALISE e GEMINI_API_KEY estiverem configurados."""
+    if not getattr(config, "USAR_IA_ANALISE", True):
+        return None
+
     api_key = getattr(config, "GEMINI_API_KEY", "")
     if not api_key:
+        return None
+
+    return AIAnalyzer(
+        api_key=api_key,
+        model=getattr(config, "GEMINI_MODEL", None),
+        timeout_seconds=getattr(config, "GEMINI_TIMEOUT_SECONDS", 45),
+        max_retries=getattr(config, "GEMINI_MAX_RETRIES", 3),
+    )
+
+
+def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
+    """
+    Roda a IA (Gemini) em todos os ativos com score >= SCORE_MINIMO_IA e monta
+    uma mensagem consolidada de segunda opinião. Sempre roda, independente de
+    estado ou alertas anteriores.
+
+    A IA recebe: ticker, preço, EMA/SMA21, EMA/SMA200, RSI, MACD, ATR, volume,
+    suporte, resistência, score, direção, motivos do score, notícias completas
+    (título de cada manchete, não só palavras-chave) e a imagem do gráfico
+    candlestick. Ela NÃO recalcula nada e NÃO decide entrada — só interpreta.
+
+    Se o Gemini falhar (rede, chave, limite de uso, etc.) o relatório técnico
+    principal já foi enviado antes desta função ser chamada, então o robô
+    nunca é interrompido por causa da IA.
+    """
+    analisador = _montar_analisador_ia()
+    if analisador is None:
         return ""
 
     candidatos = [r for r in resultados if r["score"] >= SCORE_MINIMO_IA and r["direcao"] != "neutro"]
     if not candidatos:
-        return "🤖 <b>Análise da IA:</b> Nenhum ativo com sinal suficiente para análise visual hoje."
+        return "🤖 <b>Análise da IA:</b> Nenhum ativo com sinal suficiente para análise hoje."
 
     sufixo = arquivo_estado.replace(".json", "")
     blocos_ia = []
@@ -137,23 +173,53 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
     for r in candidatos[:6]:  # máximo 6 pra não estourar o limite gratuito do Gemini
         ticker = r["ticker"]
         caminho = os.path.join(PASTA_GRAFICOS, f"{ticker}_{sufixo}.png")
-
         if not os.path.exists(caminho):
-            continue
+            caminho = None  # a IA continua a análise só com os dados técnicos, sem a imagem
 
-        print(f"  [IA] Analisando {ticker}...")
-        analise = analisar_ativo_visualmente(
-            ticker=ticker,
-            score=r["score"],
-            direcao=r["direcao"],
-            motivos=r["motivos"],
-            preco=r["preco"],
-            caminho_imagem=caminho,
-            api_key=api_key,
-        )
-        blocos_ia.append(formatar_analise_ia(ticker, r["preco"], analise))
+        try:
+            ultimo = r["df"].iloc[-1]
+            nome_empresa = config.NOME_EMPRESA.get(ticker, ticker)
 
-        import time
+            try:
+                noticias_ativo = checar_risco_noticias(nome_empresa).get("noticias", [])
+            except Exception as e:
+                logging.warning("Falha ao buscar notícias de %s para a IA: %s", ticker, e, exc_info=True)
+                noticias_ativo = []
+
+            print(f"  [IA] Analisando {ticker}...")
+            resultado_ia = analisador.analyze_asset(
+                ticker=ticker,
+                current_price=float(r["preco"]),
+                ema21=float(ultimo["sma21"]),      # média móvel curta já calculada pelo robô (SMA21)
+                ema200=float(ultimo["sma200"]),    # média móvel longa já calculada pelo robô (SMA200)
+                rsi=float(ultimo["rsi"]),
+                macd=float(ultimo["macd"]),
+                volume=float(ultimo["volume"]),
+                atr=float(ultimo["atr"]),
+                support=float(ultimo["suporte"]),
+                resistance=float(ultimo["resistencia"]),
+                score=r["score"],
+                direction=r["direcao"],
+                reasons=r["motivos"],
+                news=noticias_ativo,
+                chart_path=caminho,
+            )
+        except Exception as e:
+            # Nunca deixa uma falha inesperada da IA derrubar o relatório.
+            logging.error("Falha inesperada na análise de IA de %s: %s", ticker, e, exc_info=True)
+            resultado_ia = None
+
+        if resultado_ia is None:
+            blocos_ia.append(
+                f"⚠️ <b>{ticker}</b> — IA indisponível no momento "
+                f"(o placar técnico acima já é válido e não depende da IA)."
+            )
+        else:
+            blocos_ia.append(
+                f"<b>{ticker}</b> — R$ {r['preco']:.2f}\n"
+                f"{analisador.format_telegram_message(resultado_ia)}"
+            )
+
         time.sleep(4)  # respeita o limite de 15 chamadas/minuto do plano gratuito
 
     if not blocos_ia:
@@ -162,7 +228,8 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
     hoje = date.today().strftime("%d/%m/%Y")
     cabecalho = (
         f"🤖 <b>Análise da IA — {hoje}</b>\n"
-        f"Leitura visual dos gráficos com mais força hoje.\n\n"
+        f"Segunda opinião do Gemini sobre os ativos com sinal técnico mais forte hoje "
+        f"(interpreta o que o robô já calculou — não substitui o placar técnico).\n\n"
     )
     return cabecalho + "\n\n".join(blocos_ia)
 

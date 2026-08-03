@@ -90,7 +90,8 @@ class AIAnalyzer:
 
             logger.error(
                 "Erro criando cliente Gemini: %s",
-                e
+                e,
+                exc_info=True,
             )
 
             return None
@@ -204,10 +205,21 @@ class AIAnalyzer:
 
             except Exception as e:
 
+                codigo_http = (
+                    getattr(e, "code", None)
+                    or getattr(e, "status_code", None)
+                    or getattr(e, "status", None)
+                )
+
                 logger.warning(
-                    "Tentativa %s Gemini falhou: %s",
+                    "Tentativa %s/%s de chamada ao Gemini falhou "
+                    "(status=%s, tipo=%s): %s",
                     attempt,
-                    e
+                    self.max_retries,
+                    codigo_http,
+                    type(e).__name__,
+                    e,
+                    exc_info=True,
                 )
 
 
@@ -683,7 +695,9 @@ Dados do robô:
 
                 "Erro chamada Gemini: %s",
 
-                e
+                e,
+
+                exc_info=True,
 
             )
 
