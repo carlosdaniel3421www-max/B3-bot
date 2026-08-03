@@ -513,6 +513,21 @@ Você deve analisar:
 - risco da operação;
 - melhor estratégia de entrada.
 
+IMPORTANTE SOBRE A ESCALA DE CONFIANÇA:
+
+O campo "confianca" é um número INTEIRO de 0 a 100 (percentual),
+representando o quanto VOCÊ está confiante nessa análise.
+
+Essa escala é DIFERENTE da escala do "score_robo" que você recebe
+(o score do robô é 0 a 10). NÃO copie o valor do score_robo para o
+campo confianca. Avalie sua própria confiança de 0 a 100 com base
+na qualidade e clareza dos sinais que você está vendo.
+
+Exemplos: sinais fracos ou conflitantes = confiança baixa (10-40).
+Sinais razoáveis mas com alguma dúvida = confiança média (40-70).
+Sinais fortes e alinhados (tendência + volume + momentum concordando)
+= confiança alta (70-95). Nunca use 100 (sempre há algum risco).
+
 
 
 REGRAS DE ANÁLISE:

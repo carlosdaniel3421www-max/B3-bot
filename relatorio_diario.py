@@ -36,7 +36,7 @@ logging.basicConfig(
 )
 
 PASTA_GRAFICOS = "graficos_tmp"
-SCORE_MINIMO_IA = 4  # IA analisa todos os ativos com score >= esse valor
+SCORE_MINIMO_IA = 7  # IA analisa todos os ativos com score >= esse valor
 
 
 def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
