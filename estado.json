@@ -9,11 +9,6 @@
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-01"
   },
-  "WEGE3": {
-    "score": 6,
-    "direcao": "compra",
-    "data_primeiro_alerta": "2026-08-03"
-  },
   "GGBR4": {
     "score": 8,
     "direcao": "compra",
@@ -28,5 +23,15 @@
     "score": 6,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-03"
+  },
+  "CMIG4": {
+    "score": 6,
+    "direcao": "compra",
+    "data_primeiro_alerta": "2026-08-04"
+  },
+  "RAIL3": {
+    "score": 6,
+    "direcao": "compra",
+    "data_primeiro_alerta": "2026-08-04"
   }
 }
