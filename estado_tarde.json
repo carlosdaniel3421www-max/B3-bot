@@ -1,12 +1,7 @@
 {
-  "WEGE3": {
-    "score": 10,
+  "VALE3": {
+    "score": 8,
     "direcao": "compra",
-    "data_primeiro_alerta": "2026-08-03"
-  },
-  "ITUB4": {
-    "score": 6,
-    "direcao": "venda",
-    "data_primeiro_alerta": "2026-08-04"
+    "data_primeiro_alerta": "2026-08-05"
   }
 }
