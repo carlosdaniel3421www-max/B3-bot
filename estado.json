@@ -1,17 +1,12 @@
 {
-  "WEGE3": {
-    "score": 6,
-    "direcao": "compra",
-    "data_primeiro_alerta": "2026-08-04"
-  },
   "USIM5": {
-    "score": 6,
+    "score": 8,
     "direcao": "venda",
     "data_primeiro_alerta": "2026-08-04"
   },
-  "GGBR4": {
-    "score": 8,
-    "direcao": "compra",
-    "data_primeiro_alerta": "2026-08-05"
+  "LREN3": {
+    "score": 9,
+    "direcao": "venda",
+    "data_primeiro_alerta": "2026-08-07"
   }
 }
