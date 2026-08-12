@@ -8,5 +8,25 @@
     "score": 6,
     "direcao": "venda",
     "data_primeiro_alerta": "2026-08-11"
+  },
+  "EQTL3": {
+    "score": 8,
+    "direcao": "venda",
+    "data_primeiro_alerta": "2026-08-12"
+  },
+  "LREN3": {
+    "score": 7,
+    "direcao": "venda",
+    "data_primeiro_alerta": "2026-08-12"
+  },
+  "AXIA3": {
+    "score": 6,
+    "direcao": "venda",
+    "data_primeiro_alerta": "2026-08-12"
+  },
+  "RENT3": {
+    "score": 6,
+    "direcao": "venda",
+    "data_primeiro_alerta": "2026-08-12"
   }
 }
