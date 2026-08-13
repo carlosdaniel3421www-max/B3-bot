@@ -1,6 +1,6 @@
 {
   "USIM5": {
-    "score": 8,
+    "score": 7,
     "direcao": "venda",
     "data_primeiro_alerta": "2026-08-04"
   },
@@ -15,7 +15,7 @@
     "data_primeiro_alerta": "2026-08-12"
   },
   "LREN3": {
-    "score": 7,
+    "score": 8,
     "direcao": "venda",
     "data_primeiro_alerta": "2026-08-12"
   },
@@ -28,5 +28,10 @@
     "score": 6,
     "direcao": "venda",
     "data_primeiro_alerta": "2026-08-12"
+  },
+  "BBAS3": {
+    "score": 6,
+    "direcao": "compra",
+    "data_primeiro_alerta": "2026-08-13"
   }
 }
