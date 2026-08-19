@@ -9,11 +9,6 @@
     "direcao": "venda",
     "data_primeiro_alerta": "2026-08-11"
   },
-  "EQTL3": {
-    "score": 7,
-    "direcao": "venda",
-    "data_primeiro_alerta": "2026-08-12"
-  },
   "LREN3": {
     "score": 7,
     "direcao": "venda",
@@ -33,5 +28,10 @@
     "score": 6,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-18"
+  },
+  "BBDC4": {
+    "score": 7,
+    "direcao": "venda",
+    "data_primeiro_alerta": "2026-08-19"
   }
 }
