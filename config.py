@@ -24,7 +24,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 GEMINI_MODEL = os.environ.get(
     "GEMINI_MODEL",
-    "gemini-2.5-flash-lite"
+    "gemini-3.5-flash-lite"
 )
 
 GEMINI_TIMEOUT_SECONDS = int(
@@ -54,7 +54,7 @@ DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://openrouter.ai/a
 # Ativos que você opera.
 WATCHLIST = [
     "PETR4", "VALE3", "ITUB4", "BBAS3", "WEGE3", "BBDC4", "PRIO3",
-    "SUZB3", "B3SA3", "AXIA3", "AXIA6", "ABEV3", "RENT3", "EQTL3",
+    "SUZB3", "B3SA3", "AXIA3", "ABEV3", "RENT3", "EQTL3",
     "JBSS32", "CMIG4", "GGBR4", "USIM5", "RAIL3", "LREN3",
 ]
 
@@ -82,7 +82,7 @@ NOME_EMPRESA = {
     "PETR4": "Petrobras", "VALE3": "Vale", "ITUB4": "Itaú Unibanco",
     "BBAS3": "Banco do Brasil", "WEGE3": "WEG", "BBDC4": "Bradesco",
     "PRIO3": "PetroRio", "SUZB3": "Suzano", "B3SA3": "B3",
-    "AXIA3": "Axia Energia", "AXIA6": "Axia Energia", "ABEV3": "Ambev",
+    "AXIA3": "Axia Energia", "ABEV3": "Ambev",
     "RENT3": "Localiza", "EQTL3": "Equatorial Energia", "JBSS32": "JBS",
     "CMIG4": "Cemig", "GGBR4": "Gerdau", "USIM5": "Usiminas",
     "RAIL3": "Rumo", "LREN3": "Lojas Renner",

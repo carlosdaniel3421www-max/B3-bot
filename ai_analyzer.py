@@ -45,14 +45,14 @@ class AIAnalyzer:
     """
 
 
-    DEFAULT_MODEL = "gemini-2.5-flash-lite"
+    DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
     # Modelos alternativos, tentados em ordem se o modelo principal
     # devolver 404 (NOT_FOUND — comum quando a Google descontinua/restringe
     # um modelo). Mantém o robô funcionando mesmo se o nome do modelo
     # configurado parar de existir de um dia pro outro.
     MODELOS_FALLBACK = (
-        "gemini-2.5-flash-lite",
+        "gemini-3.5-flash-lite",
         "gemini-flash-lite-latest",
         "gemini-2.0-flash-lite",
     )
@@ -895,7 +895,7 @@ Dados do robô:
             imagem = caminho.read_bytes()
 
             resposta = client.models.generate_content(
-                model="gemini-2.5-flash-lite",
+                model="gemini-flash-lite-latest",
                 contents=[
                     types.Content(
                         role="user",
