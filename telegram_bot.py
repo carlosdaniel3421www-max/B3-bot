@@ -49,10 +49,10 @@ def _salvar_offset(update_id: int):
         json.dump({"last_update_id": update_id}, f)
 
 
-def buscar_updates(token: str, offset: int) -> list:
+def buscar_updates(token: str, offset: int, timeout: int = 30) -> list:
     url = f"https://api.telegram.org/bot{token}/getUpdates"
     try:
-        r = requests.get(url, params={"offset": offset + 1, "timeout": 20}, timeout=30)
+        r = requests.get(url, params={"offset": offset + 1, "timeout": timeout}, timeout=timeout + 10)
         if not r.ok:
             logging.warning("getUpdates falhou: %s", r.text)
             return []

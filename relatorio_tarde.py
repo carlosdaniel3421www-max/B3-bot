@@ -20,7 +20,8 @@ Roda às 13h (horário de Brasília) via GitHub Actions — veja
 import config
 from relatorio_diario import gerar_e_enviar_relatorio
 
-if __name__ == "__main__":
+
+def gerar_e_enviar_relatorio_tarde():
     gerar_e_enviar_relatorio(
         watchlist=config.WATCHLIST_TARDE,
         periodo=config.PERIODO_HISTORICO,
@@ -38,3 +39,7 @@ if __name__ == "__main__":
         projetar_volume=True,
         confirmar_intradiario=True,
     )
+
+
+if __name__ == "__main__":
+    gerar_e_enviar_relatorio_tarde()
