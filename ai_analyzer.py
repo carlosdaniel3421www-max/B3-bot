@@ -228,6 +228,9 @@ class AIAnalyzer:
         if self.deepseek_api_key:
             resposta_deepseek = self._call_deepseek(prompt, chart_path)
             if resposta_deepseek:
+                logger.info(
+                    "Hybrid IA OK para o ativo: DeepSeek (resposta válida) — regra de consistência aplicada"
+                )
                 return self._validate_response(
                     resposta_deepseek,
                     direction,
@@ -237,6 +240,7 @@ class AIAnalyzer:
                 "DeepSeek indisponível (%s) — voltando pro Gemini puro.",
                 self.ultimo_erro,
             )
+            print("  [IA] DeepSeek indisponível — usando Gemini puro")
 
         for attempt in range(1, self.max_retries + 1):
 
@@ -986,6 +990,13 @@ Dados do robô:
             texto = resposta.choices[0].message.content if resposta.choices else None
             if not texto:
                 return None
+
+            logger.info(
+                "DeepSeek (%s via %s) respondeu — análise feita pelo DeepSeek V4 Flash Free",
+                self.deepseek_model,
+                self.deepseek_base_url,
+            )
+            print(f"  [IA] Análise feita pelo DeepSeek ({self.deepseek_model})")
 
             return self._extract_json(texto)
 
