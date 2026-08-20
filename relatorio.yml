@@ -25,6 +25,11 @@ jobs:
       - name: Instalar dependências
         run: pip install -r requirements.txt
 
+      - name: Verificar chaves configuradas
+        run: |
+          echo "GEMINI_API_KEY comprimento: ${#GEMINI_API_KEY}"
+          echo "DEEPSEEK_API_KEY comprimento: ${#DEEPSEEK_API_KEY}"
+
       - name: Rodar relatório diário
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
