@@ -532,6 +532,36 @@ Sinais fortes e alinhados (tendência + volume + momentum concordando)
 
 REGRAS DE ANÁLISE:
 
+REGRA DE CONSISTÊNCIA COM O ROBÔ (IMPORTANTE):
+
+O campo "score_robo" (0 a 10) já é o placar técnico calculado pelo robô.
+Use ele como referência principal do seu veredito:
+
+1) SE score_robo >= 8: Você DEVE concordar com a entrada do robô.
+   - "concorda_com_robo" = true
+   - "vale_operar" = true
+   - Só é permitido "vale_operar": false se houver sinais visuais CLAROS de
+     exaustão no gráfico (preço no topo com sombra longa, candle de reversão
+     tipo estrela cadente/engolfo baixista, volume crescendo sem avanço de preço).
+     Nesse caso, explique exatamente qual sinal visual viu em "explicacao".
+
+2) SE score_robo entre 6 e 7: Você pode concordar ou discordar.
+   - Se os indicadores estiverem conflitantes (ex: RSI > 75 sem volume),
+     prefira "vale_operar": false com "esperar_confirmacao": true.
+   - Se estiverem alinhados (tendência + momentum + volume), concorde.
+
+3) SE score_robo abaixo de 6: Você deve concordar que NÃO há setup suficiente.
+   - "vale_operar" = false, "entrada_agora" = false.
+
+4) NUNCA contradiga o robô sem motivo técnico explícito. Se discordar,
+   aponte SEMPRE o dado concreto que mudou sua leitura (nível de suporte,
+   volume, RSI, divergência, padrão de candle).
+
+5) EXAUSTÃO DE TENDÊNCIA: Se o preço subiu consecutivamente por 3-5 dias
+   sem pullback de no mínimo 2-3%, a tendência pode estar madura para
+   correção. RSI > 75 + volume constante = risco alto de reversão imediata.
+   Nesse caso, recomende "esperar_confirmacao": true em vez de entrada
+   imediata.
 
 1) TENDÊNCIA
 

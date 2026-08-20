@@ -24,7 +24,8 @@ from calendario import checar_resultado_proximo
 from gestao_risco import calcular_tamanho_posicao
 from estado import carregar_estado, salvar_estado, eh_alerta_novo, atualizar_estado
 from ai_analyzer import AIAnalyzer
-from b3_swing_analyzer import sugerir_stop_alvo, plotar_grafico
+from posicoes import carregar_posicoes, formatar_gestao_todas
+from b3_swing_analyzer import sugerir_stop_alvo, plotar_grafico, determinar_veredito
 from telegram_utils import enviar_mensagem, enviar_album
 
 # Garante que os logs de erro do ai_analyzer.py (status HTTP, mensagem,
@@ -48,14 +49,20 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
     score = resultado["score"]
     direcao = resultado["direcao"]
 
-    if direcao == "neutro":
-        emoji, palavra = "⚪", "NEUTRO"
-    elif direcao == "compra":
-        emoji, palavra = "🟢", "COMPRA"
-    else:
-        emoji, palavra = "🔴", "VENDA"
+    veredito = determinar_veredito(score, direcao)
 
-    cabecalho = f"{emoji} <b>{ticker} — {score}/10 ({palavra})</b>"
+    if direcao == "neutro":
+        palavra = "NEUTRO"
+    elif direcao == "compra":
+        palavra = "COMPRA"
+    else:
+        palavra = "VENDA"
+
+    cabecalho = (
+        f"{veredito['emoji']} <b>{veredito['veredito']}</b> — {ticker} "
+        f"({score}/10 {palavra})\n"
+        f"<i>{veredito['descricao']}</i>"
+    )
     motivos_txt = "\n".join(f"  • {m}" for m in resultado["motivos"])
 
     if direcao == "neutro" or score < nivel_detalhe:
@@ -235,6 +242,45 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
     return cabecalho + "\n\n".join(blocos_ia)
 
 
+def montar_gestao_posicoes(resultados: list) -> str:
+    """
+    Monta o bloco "GESTÃO DE POSIÇÕES ABERTAS" usando os preços do screener
+    (quando o ativo está na watchlist) e baixando os demais via yfinance.
+    Retorna string vazia se não houver posições abertas registradas.
+    """
+    posicoes = carregar_posicoes()
+    if not posicoes:
+        return ""
+
+    precos = {r["ticker"]: float(r["preco"]) for r in resultados}
+
+    faltantes = [t for t in posicoes if t not in precos]
+    if faltantes:
+        try:
+            import pandas as pd
+            import yfinance as yf
+
+            df = yf.download(
+                [f"{t}.SA" for t in faltantes], period="5d", interval="1d",
+                auto_adjust=True, progress=False, group_by="ticker",
+            )
+            for t in faltantes:
+                try:
+                    d = df.get(t) or df.get(f"{t}.SA")
+                    if d is None:
+                        continue
+                    if isinstance(d.columns, pd.MultiIndex):
+                        d.columns = d.columns.get_level_values(0)
+                    d = d.rename(columns=str.lower)
+                    precos[t] = float(d["close"].iloc[-1])
+                except Exception:
+                    precos[t] = None
+        except Exception as e:
+            logging.warning("Falha ao buscar preços das posições abertas: %s", e)
+
+    return formatar_gestao_todas(posicoes, precos)
+
+
 def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
                               arquivo_estado="estado.json", atr_mult: float = 1.5,
                               risco_retorno: float = 2.0, titulo: str = "Relatório B3",
@@ -293,8 +339,33 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
     cabecalho_msg = f"📊 <b>{titulo} — {hoje}</b>\n"
     if nota_extra:
         cabecalho_msg += f"{nota_extra}\n"
+
+    # --- Resumo executivo de vereditos no topo ---
+    contagem = {"ENTRAR": [], "AGUARDAR": [], "EVITAR": [], "SEM SINAL": []}
+    for r in resultados:
+        v = determinar_veredito(r["score"], r["direcao"])["veredito"]
+        contagem[v].append(r["ticker"])
+
+    resumo_vereditos = []
+    if contagem["ENTRAR"]:
+        resumo_vereditos.append(f"🟢 <b>ENTRAR:</b> {', '.join(contagem['ENTRAR'])}")
+    if contagem["AGUARDAR"]:
+        resumo_vereditos.append(f"🟡 <b>AGUARDAR:</b> {', '.join(contagem['AGUARDAR'])}")
+    if contagem["EVITAR"]:
+        resumo_vereditos.append(f"🔴 <b>EVITAR:</b> {', '.join(contagem['EVITAR'])}")
+    if contagem["SEM SINAL"]:
+        resumo_vereditos.append(f"⚪ <b>SEM SINAL:</b> {', '.join(contagem['SEM SINAL'])}")
+    if resumo_vereditos:
+        cabecalho_msg += "\n" + "\n".join(resumo_vereditos) + "\n"
+
+    # --- Gestão de posições abertas: o que fazer com o que já está operando ---
+    print("Montando gestão de posições abertas...")
+    gestao_posicoes = montar_gestao_posicoes(resultados)
+    if gestao_posicoes:
+        cabecalho_msg += "\n" + gestao_posicoes + "\n"
+
     cabecalho_msg += (
-        f"Ranking de {len(resultados)} ativo(s) — do maior sinal pro menor.\n\n"
+        f"\nRanking de {len(resultados)} ativo(s) — do maior sinal pro menor.\n\n"
     )
 
     mensagem_final = cabecalho_msg + "\n\n".join(blocos)

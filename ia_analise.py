@@ -57,19 +57,34 @@ DADOS DO SISTEMA DE REGRAS:
 
 O gráfico tem 4 painéis: preço com médias (SMA9/21/50/200) + suporte/resistência, volume, RSI/Estocástico e MACD.
 
-REGRAS IMPORTANTES DE LEITURA:
-- RSI/Estocástico altos DENTRO de tendência de alta = momentum, não topo
-- Rompimento de máxima com volume = sinal de compra, não venda
-- Divergência baixista (preço sobe, RSI cai) = sinal de fraqueza real
-- Volume abaixo da média = movimento fraco, cuidado
+REGRAS PARA DECISÃO DE ENTRAR:
 
-Responda APENAS em JSON válido, sem markdown, sem texto fora do JSON:
+1) SE score >= 8: A IA DEVE CONCORDAR com a entrada do robô. Veredicto esperado: "ENTRAR". 
+   A menos que haja sinais visuais claros de exaustão (preço no topo, sombra longa, reversão de candle).
+   
+2) SE score entre 6 e 7: IA pode concordar ou discordar. Se indicadores conflitantes (RSI extremo + volume baixo), pencione para "AGUARDAR".
+   
+3) SE score abaixo de 6: IA deve concordar que NÃO há setup suficiente. Veredicto: "AGUARDAR" ou "EVITAR".
+
+REGRAS PARA "RAZÕES_NAO_ENTRAR":
+- Apenas liste motivos se veredicto for "EVITAR" ou "AGUARDAR"
+- Exemplos válidos: "RSI > 80 + volume abaixo da média = sobrecompra sem força"
+- NÃO liste opiniões gericas sobre o robô
+
+REGRAS PARA CONFIANÇA (0-100):
+- 80-100: Sinais totalmente alinhados, gráfico confirma dados técnicos
+- 50-79: Sinais mistos, precisa de confirmação extra
+- 0-49: Não vale operar com base nesses sinais sozinhos
+
+Responda APENAS em JSON válido, sem markdown, sem texto fora do JSON.
+Formato obrigatório:
+
 {{
-  "razoes_entrar": ["motivo 1", "motivo 2", "motivo 3"],
-  "razoes_nao_entrar": ["risco 1", "risco 2"],
-  "veredicto": "ENTRAR" ou "AGUARDAR" ou "EVITAR",
-  "confianca": 7,
-  "resumo": "Uma frase direta resumindo sua leitura do gráfico"
+  "razoes_entrar": ["motivo técnico específico", "outro motivo técnico"],
+  "razoes_nao_entrar": ["motivo específico se não operar, ex: 'RSI muito alto sem volume'"],
+  "veredicto": "ENTRAR",
+  "confianca": 85,
+  "resumo": "Frase direta de no máximo 20 palavras resumindo a leitura"
 }}"""
 
     try:

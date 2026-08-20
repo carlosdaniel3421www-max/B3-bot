@@ -131,6 +131,15 @@ def calcular_atr(df: pd.DataFrame, periodo: int = 14) -> pd.DataFrame:
     return df
 
 
+def calcular_force_index(df: pd.DataFrame, periodo: int = 13) -> pd.DataFrame:
+    """Force Index — medida da força do movimento pelo volume e mudança de preço.
+    Positive = pressão de compra, Negative = pressão de venda.
+    A Média Móvel do Force Index mostra se a força está aumentando ou diminuindo."""
+    df["force_index"] = (df["close"] - df["close"].shift(1)) * df["volume"]
+    df["force_ma"] = df["force_index"].rolling(periodo).mean()
+    return df
+
+
 def calcular_indicadores(df: pd.DataFrame) -> pd.DataFrame:
     df = calcular_medias_moveis(df)
     df = calcular_rsi(df)
@@ -139,7 +148,32 @@ def calcular_indicadores(df: pd.DataFrame) -> pd.DataFrame:
     df = calcular_vwap(df)
     df = calcular_suporte_resistencia(df)
     df = calcular_atr(df)
+    df = calcular_force_index(df)
     return df
+
+
+def determinar_veredito(score: int, direcao: str, nivel_entrar: int = 8, nivel_observar: int = 6) -> dict:
+    """
+    Converte o placar técnico (0-10) em um VEREDITO claro de ação.
+
+    Regras:
+    - score >= nivel_entrar (8): ENTRAR  — sinal forte, pode executar
+    - score entre 6 e 7        : AGUARDAR — sinal razoável, esperar confirmação
+    - score < 6                : EVITAR   — sem confluência suficiente
+    - direcao neutra           : SEM SINAL
+
+    Retorna dict com veredito, emoji e descrição pra usar no relatório.
+    """
+    if direcao == "neutro":
+        return {"veredito": "SEM SINAL", "emoji": "⚪", "descricao": "Sem confluência técnica — não operar"}
+
+    if score >= nivel_entrar:
+        return {"veredito": "ENTRAR", "emoji": "🟢", "descricao": f"Sinal forte ({score}/10) — pode executar a {direcao}"}
+
+    if score >= nivel_observar:
+        return {"veredito": "AGUARDAR", "emoji": "🟡", "descricao": f"Sinal moderado ({score}/10) — aguardar confirmação antes de {direcao}"}
+
+    return {"veredito": "EVITAR", "emoji": "🔴", "descricao": f"Sinal fraco ({score}/10) — não operar"}
 
 
 def sugerir_stop_alvo(df: pd.DataFrame, direcao: str, atr_mult: float = 1.5, risco_retorno: float = 2.0,
@@ -537,10 +571,20 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
 
     # --- 2. RSI — interpretação depende do regime de tendência ---
     rsi = ultimo["rsi"]
+    atr_atual = ultimo["atr"] if pd.notna(ultimo["atr"]) else 0
+    diff_macd = ultimo["macd"] - ultimo["macd_sinal"]
+    zona_morda_macd = 0.05 * atr_atual if atr_atual > 0 else 0
+    hist_cresceu = ultimo["macd_hist"] > penultimo["macd_hist"]
+    macd_esticado = abs(diff_macd) > zona_morda_macd and hist_cresceu
+
     if em_alta:
         if rsi > 70:
-            pontos_compra += 2
-            motivos_compra.append(f"RSI em {rsi:.0f} — momentum forte dentro da tendência de alta (não é sinal de topo)")
+            if macd_esticado:
+                pontos_compra += 1
+                motivos_compra.append(f"RSI em {rsi:.0f} — momentum forte, mas MACD também esticado. Tendência pode estar exausta, cuidado com reversão.")
+            else:
+                pontos_compra += 2
+                motivos_compra.append(f"RSI em {rsi:.0f} — momentum forte dentro da tendência de alta (não é sinal de topo)")
         elif rsi < 40:
             pts = 2 if rsi < 30 else 1
             pontos_compra += pts
@@ -550,9 +594,13 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
             pontos_venda += 2
             motivos_venda.append(f"RSI em {rsi:.0f} — momentum forte dentro da tendência de baixa (não é sinal de fundo)")
         elif rsi > 60:
-            pts = 2 if rsi > 70 else 1
-            pontos_venda += pts
-            motivos_venda.append(f"RSI em {rsi:.0f} — repique dentro da tendência de baixa (possível ponto de venda)")
+            if macd_esticado:
+                pontos_venda += 1
+                motivos_venda.append(f"RSI em {rsi:.0f} — repique com momentum do MACD, cuidado com possível reversão da tendência de baixa")
+            else:
+                pts = 2 if rsi > 70 else 1
+                pontos_venda += pts
+                motivos_venda.append(f"RSI em {rsi:.0f} — repique dentro da tendência de baixa (possível ponto de venda)")
     else:  # mercado lateral -> reversão à média clássica
         if rsi < 30:
             pontos_compra += 2
@@ -831,6 +879,15 @@ def main():
     print("investimento. Sempre valide com sua própria análise de risco.\n")
 
     caminho_saida = args.saida or f"{args.ticker.upper()}_analise.png"
+    # Aviso de exaustão baseando no Force Index e RSI
+    ultimo = df.iloc[-1]
+    if ultimo["rsi"] > 75 and ultimo["force_ma"] < 0:
+        print("⚠️ ALERTA DE EXAUSTÃO: RSI > 75 E Force Index negativo.")
+        print("   Preço subiu muito mas volume de compra está caindo.")
+        print("   Considere aguardar pullback antes de entrar.")
+    elif ultimo["rsi"] > 75 and ultimo["force_ma"] > 0:
+        print("⚠️ ALERTA: RSI > 75, mas Force Index positivo.")
+        print("   Tendência ainda tem força de volume, mas risco de reversão alto.")
     plotar_grafico(df, args.ticker.upper(), caminho_saida)
     print(f"Gráfico salvo em: {caminho_saida}")
 

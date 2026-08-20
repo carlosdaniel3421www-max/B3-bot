@@ -175,13 +175,125 @@ def imprimir_resultado(resultado: dict):
     print("Use como indicativo, não como garantia de resultado futuro.\n")
 
 
+def rodar_backtest_multi(tickers: list, periodo: str = "2y", nivel_minimo: int = 6,
+                         max_dias_holding: int = 20) -> dict:
+    """
+    Roda o backtest em vários ativos e agrega os resultados pra você ter uma
+    ideia REAL do desempenho da estratégia como um todo (e não de um ativo
+    isolado, que pode ter tido sorte ou azar).
+    """
+    resultados = []
+    falhas = []
+    for ticker in tickers:
+        try:
+            resultados.append(rodar_backtest(ticker, periodo=periodo,
+                                             nivel_minimo=nivel_minimo,
+                                             max_dias_holding=max_dias_holding))
+        except Exception as e:
+            falhas.append(f"{ticker}: {e}")
+
+    todos_trades = []
+    for r in resultados:
+        todos_trades.extend(r.get("trades", []))
+
+    if not todos_trades:
+        return {
+            "tickers": tickers,
+            "total_trades": 0,
+            "mensagem": "Nenhum trade gerado nos ativos testados.",
+            "por_ativo": resultados,
+            "falhas": falhas,
+        }
+
+    ganhos = [t for t in todos_trades if t["retorno_pct"] > 0]
+    perdas = [t for t in todos_trades if t["retorno_pct"] <= 0]
+
+    retorno_total_pct = sum(t["retorno_pct"] for t in todos_trades)
+    taxa_acerto = len(ganhos) / len(todos_trades) * 100
+    media_ganho = sum(t["retorno_pct"] for t in ganhos) / len(ganhos) if ganhos else 0
+    media_perda = sum(t["retorno_pct"] for t in perdas) / len(perdas) if perdas else 0
+    soma_ganhos = sum(t["retorno_pct"] for t in ganhos)
+    soma_perdas_abs = abs(sum(t["retorno_pct"] for t in perdas))
+    profit_factor = (soma_ganhos / soma_perdas_abs) if soma_perdas_abs > 0 else float("inf")
+
+    acumulado = 0
+    pico = 0
+    max_drawdown = 0
+    for t in todos_trades:
+        acumulado += t["retorno_pct"]
+        pico = max(pico, acumulado)
+        max_drawdown = min(max_drawdown, acumulado - pico)
+
+    return {
+        "tickers": tickers,
+        "total_trades": len(todos_trades),
+        "taxa_acerto_pct": round(taxa_acerto, 1),
+        "retorno_total_pct": round(retorno_total_pct, 2),
+        "retorno_medio_por_trade_pct": round(retorno_total_pct / len(todos_trades), 2),
+        "media_ganho_pct": round(media_ganho, 2),
+        "media_perda_pct": round(media_perda, 2),
+        "profit_factor": round(profit_factor, 2) if profit_factor != float("inf") else "inf (sem perdas)",
+        "max_drawdown_pct": round(max_drawdown, 2),
+        "por_ativo": resultados,
+        "falhas": falhas,
+    }
+
+
+def imprimir_resultado_multi(resultado: dict):
+    print("=" * 60)
+    print(f"BACKTEST MULTI-ATIVO — {', '.join(resultado['tickers'])}")
+    print("=" * 60)
+    if resultado["total_trades"] == 0:
+        print(resultado["mensagem"])
+        for r in resultado["por_ativo"]:
+            if r["total_trades"] == 0:
+                print(f"  - {r['ticker']}: sem trades")
+        if resultado["falhas"]:
+            print("\nFalhas:")
+            for f in resultado["falhas"]:
+                print(f"  - {f}")
+        return
+
+    print(f"Total de trades (todos):{resultado['total_trades']}")
+    print(f"Taxa de acerto:         {resultado['taxa_acerto_pct']}%")
+    print(f"Retorno total (soma):   {resultado['retorno_total_pct']}%")
+    print(f"Retorno médio/trade:    {resultado['retorno_medio_por_trade_pct']}%")
+    print(f"Ganho médio (trades+):  {resultado['media_ganho_pct']}%")
+    print(f"Perda média (trades-):  {resultado['media_perda_pct']}%")
+    print(f"Profit factor:          {resultado['profit_factor']}")
+    print(f"Máximo drawdown:        {resultado['max_drawdown_pct']}%")
+    print("-" * 60)
+    print("Por ativo:")
+    for r in resultado["por_ativo"]:
+        if r["total_trades"] == 0:
+            print(f"  {r['ticker']}: sem trades")
+        else:
+            print(f"  {r['ticker']}: {r['total_trades']} trades | "
+                  f"acerto {r['taxa_acerto_pct']}% | retorno {r['retorno_total_pct']:+.2f}% | "
+                  f"PF {r['profit_factor']}")
+    if resultado["falhas"]:
+        print("\nFalhas:")
+        for f in resultado["falhas"]:
+            print(f"  - {f}")
+    print("=" * 60)
+    print("\nAVISO: backtest simplificado (sem custos, sem simular opção real).")
+    print("A taxa de acerto realista pra trend following é ~40-55% — o que")
+    print("importa é o profit factor > 1 e perdas controladas.\n")
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Backtest da estratégia de confluência em um ativo")
-    parser.add_argument("ticker", help="Código do ativo, ex: PETR4")
+    parser = argparse.ArgumentParser(description="Backtest da estratégia de confluência (1 ativo ou vários)")
+    parser.add_argument("tickers", nargs="+", help="Código(s) do ativo, ex: PETR4 (ou PETR4 VALE3 ITUB4)")
     parser.add_argument("--periodo", default="2y", help="Período de histórico (ex: 1y, 2y, 5y)")
     parser.add_argument("--nivel-minimo", type=int, default=6, help="Nível mínimo (0-10) pra considerar entrada")
     parser.add_argument("--max-dias", type=int, default=20, help="Máximo de dias segurando o trade")
     args = parser.parse_args()
 
-    resultado = rodar_backtest(args.ticker, periodo=args.periodo, nivel_minimo=args.nivel_minimo, max_dias_holding=args.max_dias)
-    imprimir_resultado(resultado)
+    if len(args.tickers) == 1:
+        resultado = rodar_backtest(args.tickers[0], periodo=args.periodo,
+                                   nivel_minimo=args.nivel_minimo, max_dias_holding=args.max_dias)
+        imprimir_resultado(resultado)
+    else:
+        resultado = rodar_backtest_multi(args.tickers, periodo=args.periodo,
+                                         nivel_minimo=args.nivel_minimo, max_dias_holding=args.max_dias)
+        imprimir_resultado_multi(resultado)
