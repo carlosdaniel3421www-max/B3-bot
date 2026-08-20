@@ -232,7 +232,8 @@ class AIAnalyzer:
 
                     return self._validate_response(
                         response,
-                        direction
+                        direction,
+                        score
                     )
 
                 self.ultimo_erro = (
@@ -532,36 +533,41 @@ Sinais fortes e alinhados (tendência + volume + momentum concordando)
 
 REGRAS DE ANÁLISE:
 
-REGRA DE CONSISTÊNCIA COM O ROBÔ (IMPORTANTE):
+REGRA DE CONSISTÊNCIA COM O ROBÔ (OBRIGATÓRIA — NÃO PODE QUEBRAR):
 
 O campo "score_robo" (0 a 10) já é o placar técnico calculado pelo robô.
-Use ele como referência principal do seu veredito:
+A SUA RESPOSTA SERÁ FORÇADA A SEGUIR ESTA REGRA NO CÓDIGO. Portanto,
+responda SEMPRE coerente com ela:
 
-1) SE score_robo >= 8: Você DEVE concordar com a entrada do robô.
+1) SE score_robo >= 8 (o robô deu ENTRAR):
    - "concorda_com_robo" = true
    - "vale_operar" = true
-   - Só é permitido "vale_operar": false se houver sinais visuais CLAROS de
-     exaustão no gráfico (preço no topo com sombra longa, candle de reversão
-     tipo estrela cadente/engolfo baixista, volume crescendo sem avanço de preço).
-     Nesse caso, explique exatamente qual sinal visual viu em "explicacao".
+   - "entrada_agora" = true
+   - "esperar_confirmacao" = false
+   Você PODE e DEVE apontar riscos, mas a entrada é aprovada.
 
-2) SE score_robo entre 6 e 7: Você pode concordar ou discordar.
-   - Se os indicadores estiverem conflitantes (ex: RSI > 75 sem volume),
-     prefira "vale_operar": false com "esperar_confirmacao": true.
-   - Se estiverem alinhados (tendência + momentum + volume), concorde.
+2) SE score_robo entre 6 e 7 (o robô deu AGUARDAR):
+   - "vale_operar" = false
+   - "entrada_agora" = false
+   - "esperar_confirmacao" = true
+   Ainda não é hora de entrar. Explique o que falta pra confirmar.
 
-3) SE score_robo abaixo de 6: Você deve concordar que NÃO há setup suficiente.
-   - "vale_operar" = false, "entrada_agora" = false.
+3) SE score_robo abaixo de 6 (o robô deu EVITAR):
+   - "concorda_com_robo" = false
+   - "vale_operar" = false
+   - "entrada_agora" = false
+   Não há setup suficiente. Diga o que está faltando.
 
-4) NUNCA contradiga o robô sem motivo técnico explícito. Se discordar,
-   aponte SEMPRE o dado concreto que mudou sua leitura (nível de suporte,
-   volume, RSI, divergência, padrão de candle).
+4) NUNCA contradiga o robô. A IA é uma SEGUNDA OPINIÃO que explica e
+   detalha a decisão do robô — nunca é ela quem decide entrar ou não.
+   Seu papel: explicar POR QUE o placar do robô faz sentido (ou avisar
+   dos riscos), não criar um veredito paralelo.
 
 5) EXAUSTÃO DE TENDÊNCIA: Se o preço subiu consecutivamente por 3-5 dias
    sem pullback de no mínimo 2-3%, a tendência pode estar madura para
    correção. RSI > 75 + volume constante = risco alto de reversão imediata.
-   Nesse caso, recomende "esperar_confirmacao": true em vez de entrada
-   imediata.
+   Isso deve constar em "pontos_fracos" e "explicacao" como aviso de risco,
+   mas NÃO muda "vale_operar" (que é definido pela regra acima).
 
 1) TENDÊNCIA
 
@@ -905,7 +911,8 @@ Dados do robô:
     def _validate_response(
         self,
         data: dict[str, Any],
-        original_direction: str
+        original_direction: str,
+        score_robo: float = 0
 
     ) -> dict[str, Any]:
 
@@ -915,6 +922,11 @@ Dados do robô:
         A IA pode errar.
         Essa função garante que o robô receba
         sempre um formato previsível.
+
+        REGRA RÍGIDA (imposta aqui no código, não só no prompt):
+        A IA SÓ pode aprovar entrada ("vale_operar") quando o robô deu
+        o sinal verde ENTRAR (score >= 8). Abaixo disso ela é FORÇADA a
+        NÃO operar, não importa o que o Gemini tenha escrito.
         """
 
 
@@ -1188,6 +1200,22 @@ Dados do robô:
 
         }
 
+        # ------------------------------------------------------------------
+        # REGRA RÍGIDA DE CONSISTÊNCIA COM O ROBÔ (imposta no código):
+        # A IA SÓ aprova entrada quando o robô deu ENTRAR (score >= 8).
+        # Senão, força a resposta da IA a NÃO operar, ignorando o que o
+        # Gemini escreveu (ele pode errar ou "viajar").
+        # ------------------------------------------------------------------
+        if score_robo >= 8:
+            resultado["concorda_com_robo"] = True
+            resultado["vale_operar"] = True
+            resultado["entrada_agora"] = True
+            resultado["esperar_confirmacao"] = False
+        else:
+            resultado["concorda_com_robo"] = False
+            resultado["vale_operar"] = False
+            resultado["entrada_agora"] = False
+            resultado["esperar_confirmacao"] = True
 
         return resultado
 

@@ -723,6 +723,69 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
         score = pontos_venda
         motivos = motivos_venda
 
+    # --- 6. PENALIDADE DE EXAUSTÃO (aplica-se APÓS o placar) ---
+    # Se a tendência está esticada demais, reduzimos o placar pra impedir
+    # que o robô dê ENTRAR exatamente em cima de um topo. Essa é a principal
+    # causa de "comprei e caiu": entrar comprado depois de 5+ dias de alta
+    # sem pullback, com RSI > 75 e volume crescendo sem avanço de preço.
+    dias_altas_seguidas = 0
+    fechamentos = df["close"].tolist()
+    for j in range(len(fechamentos) - 1, 0, -1):
+        if fechamentos[j] > fechamentos[j - 1]:
+            dias_altas_seguidas += 1
+        else:
+            break
+    dias_baixas_seguidas = 0
+    for j in range(len(fechamentos) - 1, 0, -1):
+        if fechamentos[j] < fechamentos[j - 1]:
+            dias_baixas_seguidas += 1
+        else:
+            break
+
+    rsi = ultimo["rsi"] if pd.notna(ultimo["rsi"]) else 50
+    ganho_hoje = (ultimo["close"] - penultimo["close"]) / penultimo["close"] if penultimo["close"] > 0 else 0
+    # Distribuição: volume alto mas o preço praticamente não avançou hoje
+    # (depois de vários dias de alta). Não confunde com rompimento real,
+    # que tem avanço de preço + volume.
+    volume_alto_sem_avancar = (
+        volume_alto
+        and ganho_hoje < 0.005
+        and dias_altas_seguidas >= 3
+    )
+
+    # Exaustão de COMPRA: tendência de alta esticada
+    exaustao_compra = (
+        em_alta
+        and rsi > 75
+        and (dias_altas_seguidas >= 4 or macd_esticado)
+    )
+    # Exaustão de VENDA: tendência de baixa esticada (analogia)
+    exaustao_venda = (
+        em_baixa
+        and rsi < 25
+        and dias_baixas_seguidas >= 4
+    )
+
+    if exaustao_compra and direcao == "compra":
+        score = min(score, 7)  # nunca dá ENTRAR (>= 8) em topo esticado
+        motivos.append(
+            f"⚠️ Exaustão de alta: RSI {rsi:.0f} com {dias_altas_seguidas} dias de alta "
+            "sem pullback — risco alto de correção. Placar limitado a 7/10."
+        )
+    if volume_alto_sem_avancar and direcao == "compra" and em_alta:
+        if score >= 8:
+            score = min(score, 7)
+            motivos.append(
+                "⚠️ Volume alto com preço sem avançar (distribuição) — risco de reversão. Placar limitado a 7/10."
+            )
+
+    if exaustao_venda and direcao == "venda":
+        score = min(score, 7)
+        motivos.append(
+            f"⚠️ Exaustão de baixa: RSI {rsi:.0f} com queda prolongada sem repique — "
+            "risco de fundo. Placar limitado a 7/10."
+        )
+
     return {
         "direcao": direcao,
         "score": score,
