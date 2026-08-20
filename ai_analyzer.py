@@ -65,7 +65,7 @@ class AIAnalyzer:
         timeout_seconds: int = 45,
         max_retries: int = 3,
         deepseek_api_key: str = "",
-        deepseek_model: str = "deepseek-v4-flash-free",
+        deepseek_model: str = "nemotron-3.5-free",
         deepseek_base_url: str = "https://opencode.ai/zen/v1",
     ):
 

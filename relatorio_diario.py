@@ -159,7 +159,7 @@ def _montar_analisador_ia() -> AIAnalyzer | None:
         timeout_seconds=getattr(config, "GEMINI_TIMEOUT_SECONDS", 45),
         max_retries=getattr(config, "GEMINI_MAX_RETRIES", 3),
         deepseek_api_key=getattr(config, "DEEPSEEK_API_KEY", ""),
-        deepseek_model=getattr(config, "DEEPSEEK_MODEL", "deepseek-v4-flash-free"),
+        deepseek_model=getattr(config, "DEEPSEEK_MODEL", "nemotron-3.5-free"),
         deepseek_base_url=getattr(config, "DEEPSEEK_BASE_URL", "https://opencode.ai/zen/v1"),
     )
 
