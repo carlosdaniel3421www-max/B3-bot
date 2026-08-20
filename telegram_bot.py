@@ -27,7 +27,7 @@ import requests
 
 import config
 from posicoes import (
-    carregar_posicoes, carregar_propostas, formatar_gestao_todas,
+    adicionar_posicao, carregar_posicoes, carregar_propostas, formatar_gestao_todas,
     gerar_gestao_posicao, remover_posicao, registrar_da_proposta,
 )
 
@@ -110,8 +110,26 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
 
     if comando in ("/registrar", "/adicionar"):
         if not args:
-            return "Uso: /registrar TICKER (ou /registrar TICKER QUANTIDADE)"
+            return "Uso: /registrar TICKER (usa a proposta do robô)\nou: /registrar TICKER DIRECAO PRECO STOP ALVO (registro manual de qualquer operação)"
         ticker = args[0].upper()
+
+        # Registro manual: /registrar PETR4 compra 43.11 40.50 48.22 [QTD]
+        if len(args) >= 5:
+            try:
+                direcao = args[1].lower()
+                preco = float(args[2])
+                stop = float(args[3])
+                alvo = float(args[4])
+                quantidade = int(args[5]) if len(args) > 5 else 0
+                posicao = adicionar_posicao(ticker, direcao, preco, stop, alvo, quantidade=quantidade)
+                return f"✅ <b>{ticker}</b> registrada manualmente ({posicao['direcao']}). Entrada R$ {posicao['preco_entrada']} · Stop R$ {posicao['stop']} · Alvo R$ {posicao['alvo']}. Agora acompanho todo dia."
+            except ValueError as e:
+                return f"⚠️ Registro não feito: {e}"
+            except Exception as e:
+                logging.warning("Erro ao registrar %s manualmente: %s", ticker, e)
+                return f"⚠️ Erro ao registrar: {e}"
+
+        # Registro pela proposta do robô: /registrar TICKER [QTD]
         quantidade = int(args[1]) if len(args) > 1 else 0
         posicao, msg = registrar_da_proposta(ticker, quantidade=quantidade)
         return msg
@@ -162,6 +180,8 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
         return (
             "🤖 <b>Comandos do robô:</b>\n"
             "  /registrar TICKER — registra a posição que o robô propôs\n"
+            "  /registrar TICKER DIRECAO PRECO STOP ALVO — registra QUALQUER\n"
+            "    operação sua (ex: /registrar PETR4 compra 43.11 40.50 48.22)\n"
             "  /remover TICKER — remove a posição (fechou a operação)\n"
             "  /posicoes — mostra todas as posições + o que fazer hoje\n"
             "  /status TICKER — gestão de uma posição com preço atual\n"
