@@ -65,8 +65,8 @@ class AIAnalyzer:
         timeout_seconds: int = 45,
         max_retries: int = 3,
         deepseek_api_key: str = "",
-        deepseek_model: str = "deepseek/deepseek-v4-flash:free",
-        deepseek_base_url: str = "https://openrouter.ai/api/v1",
+        deepseek_model: str = "deepseek-v4-flash-free",
+        deepseek_base_url: str = "https://opencode.ai/zen/v1",
     ):
 
         self.api_key = api_key
@@ -987,7 +987,6 @@ Dados do robô:
                 api_key=self.deepseek_api_key,
                 base_url=self.deepseek_base_url,
                 timeout=self.timeout_seconds,
-                default_headers={"HTTP-Referer": "https://github.com/", "X-Title": "B3-bot"},
             )
 
             resposta = client.chat.completions.create(

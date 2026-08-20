@@ -43,12 +43,12 @@ GEMINI_MAX_RETRIES = int(
 USAR_IA_ANALISE = True
 
 # --- IA híbrida: Gemini descreve o gráfico (grátis) + DeepSeek V4 Flash Free ---
-# Chave GRÁTIS da OpenRouter (openrouter.ai — sem cartão de crédito):
-# Settings -> Keys -> Create key. Cobre ~200 chamadas/dia, o robô usa ~12.
+# Chave GRÁTIS do opencode zen (https://opencode.ai/auth -> Keys):
+# mesmo modelo que o opencode usa. Sem cartão de crédito.
 # Sem chave, volta pro Gemini puro.
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek/deepseek-v4-flash:free")
-DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://openrouter.ai/api/v1")
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash-free")
+DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://opencode.ai/zen/v1")
 
 # --- Screener ---
 # Ativos que você opera.
