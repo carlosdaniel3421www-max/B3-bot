@@ -92,6 +92,11 @@ class AIAnalyzer:
         # "erro genérico" sem causa.
         self.ultimo_erro: Optional[str] = None
 
+        # Provedor de IA que respondeu na última análise bem-sucedida:
+        # "deepseek" (híbrido: Gemini descreveu o gráfico, DeepSeek analisou)
+        # ou "gemini" (Gemini puro — DeepSeek sem chave/indisponível).
+        self.ultimo_provedor: str = "gemini"
+
 
 
     def _get_client(self):
@@ -228,6 +233,7 @@ class AIAnalyzer:
         if self.deepseek_api_key:
             resposta_deepseek = self._call_deepseek(prompt, chart_path)
             if resposta_deepseek:
+                self.ultimo_provedor = "deepseek"
                 logger.info(
                     "Hybrid IA OK para o ativo: DeepSeek (resposta válida) — regra de consistência aplicada"
                 )
@@ -257,6 +263,8 @@ class AIAnalyzer:
 
 
                 if response:
+
+                    self.ultimo_provedor = "gemini"
 
                     return self._validate_response(
                         response,

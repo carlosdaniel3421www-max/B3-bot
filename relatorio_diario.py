@@ -236,8 +236,10 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
                 f"O placar técnico acima já é válido e não depende da IA."
             )
         else:
+            provedor = getattr(analisador, "ultimo_provedor", "gemini")
+            etiqueta_ia = "DeepSeek V4 Flash Free" if provedor == "deepseek" else "Gemini"
             blocos_ia.append(
-                f"<b>{ticker}</b> — R$ {r['preco']:.2f}\n"
+                f"<b>{ticker}</b> — R$ {r['preco']:.2f} · <i>IA: {etiqueta_ia}</i>\n"
                 f"{analisador.format_telegram_message(resultado_ia)}"
             )
 
