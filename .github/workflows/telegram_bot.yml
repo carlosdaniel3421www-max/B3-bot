@@ -1,0 +1,43 @@
+name: Bot Telegram (comandos)
+
+# Roda a cada 5 minutos pra ler seus comandos no chat do Telegram
+# (/registrar TICKER, /remover TICKER, /posicoes...) e registrar/gerenciar
+# suas posições automaticamente.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  processar-comandos:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o código do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Processar comandos do Telegram
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python telegram_bot.py
+
+      - name: Salvar mudanças (posicoes.json, propostas.json, offset)
+        run: |
+          git config user.name "robo-b3-bot"
+          git config user.email "actions@github.com"
+          git add posicoes.json propostas.json telegram_offset.json
+          git diff --staged --quiet || git commit -m "Atualiza posicoes/propostas [skip ci]"
+          git pull --rebase --autostash origin main
+          git push

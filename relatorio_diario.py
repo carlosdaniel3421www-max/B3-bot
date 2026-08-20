@@ -24,7 +24,7 @@ from calendario import checar_resultado_proximo
 from gestao_risco import calcular_tamanho_posicao
 from estado import carregar_estado, salvar_estado, eh_alerta_novo, atualizar_estado
 from ai_analyzer import AIAnalyzer
-from posicoes import carregar_posicoes, formatar_gestao_todas
+from posicoes import carregar_posicoes, formatar_gestao_todas, salvar_proposta_entrada
 from b3_swing_analyzer import sugerir_stop_alvo, plotar_grafico, determinar_veredito
 from telegram_utils import enviar_mensagem, enviar_album
 
@@ -95,6 +95,15 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
     stop_alvo = sugerir_stop_alvo(df, direcao, atr_mult=atr_mult,
                                    risco_retorno=risco_retorno,
                                    risco_maximo_atr_mult=risco_maximo_atr_mult)
+
+    # Guarda a proposta de entrada: você decide se registra (respondendo
+    # "/registrar TICKER" no Telegram) ou ignora. Nada é registrado sozinho.
+    try:
+        salvar_proposta_entrada(ticker, direcao, resultado["preco"],
+                                stop_alvo["stop"], stop_alvo["alvo"])
+    except Exception as e:
+        logging.warning("Falha ao salvar proposta de %s: %s", ticker, e)
+
     opcao = sugerir_parametros_opcao(resultado["preco"], direcao)
     posicao = calcular_tamanho_posicao(
         config.CAPITAL_DISPONIVEL, config.RISCO_POR_OPERACAO_PCT,
@@ -125,7 +134,8 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
     plano += (
         f"  <b>Opção:</b> {opcao['tipo_opcao']} strike ~R$ {opcao['strike_sugerido_aprox']}, "
         f"venc. {opcao['vencimento_sugerido']} — {explicacao_opcao}\n"
-        f"  ⚠️ Confirme liquidez antes de operar."
+        f"  ⚠️ Confirme liquidez antes de operar.\n"
+        f"  ✅ Se ENTRAR, registre: responda <b>/registrar {ticker}</b> no chat."
     )
 
     if risco_noticias.get("positivas"):

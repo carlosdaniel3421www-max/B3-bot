@@ -41,6 +41,7 @@ import sys
 from datetime import date, datetime
 
 CAMINHO_POSICOES = "posicoes.json"
+CAMINHO_PROPOSTAS = "propostas.json"
 DIAS_UTEIS_POR_SEMANA = 5.0
 
 # Frações do caminho preço-entrada -> alvo onde aplicamos regras
@@ -65,6 +66,83 @@ def carregar_posicoes() -> dict:
 def salvar_posicoes(posicoes: dict):
     with open(CAMINHO_POSICOES, "w", encoding="utf-8") as f:
         json.dump(posicoes, f, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# PROPOSTAS: o robô sugere uma entrada (ENV). Você decide registrar ou não.
+# ---------------------------------------------------------------------------
+
+def carregar_propostas() -> dict:
+    if not os.path.exists(CAMINHO_PROPOSTAS):
+        return {}
+    try:
+        with open(CAMINHO_PROPOSTAS, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return {}
+
+
+def salvar_propostas(propostas: dict):
+    with open(CAMINHO_PROPOSTAS, "w", encoding="utf-8") as f:
+        json.dump(propostas, f, ensure_ascii=False, indent=2)
+
+
+def salvar_proposta_entrada(ticker: str, direcao: str, preco: float,
+                            stop: float, alvo: float, prazo_maximo_dias: int = 20) -> dict:
+    """Salva a proposta de entrada que o robô fez, pra você confirmar depois."""
+    ticker = ticker.upper()
+    propostas = carregar_propostas()
+    proposta = {
+        "ticker": ticker,
+        "direcao": direcao,
+        "preco_entrada": round(preco, 2),
+        "stop": round(stop, 2),
+        "alvo": round(alvo, 2),
+        "prazo_maximo_dias": prazo_maximo_dias,
+        "data_proposta": date.today().isoformat(),
+    }
+    propostas[ticker] = proposta
+    salvar_propostas(propostas)
+    return proposta
+
+
+def registrar_da_proposta(ticker: str, quantidade: int = 0) -> tuple:
+    """
+    Registra uma posição a partir da proposta mais recente do robô.
+    Retorna (posicao, mensagem).
+    """
+    ticker = ticker.upper()
+    propostas = carregar_propostas()
+    if ticker not in propostas:
+        return None, f"⚠️ Não achei proposta de entrada pra {ticker}. O robô só propõe quando dá ENTRAR (score ≥ 8) num relatório recente."
+
+    proposta = propostas[ticker]
+    posicoes = carregar_posicoes()
+    if ticker in posicoes:
+        posicao = posicoes[ticker]
+        posicao.update({
+            "direcao": proposta["direcao"],
+            "preco_entrada": proposta["preco_entrada"],
+            "stop": proposta["stop"],
+            "alvo": proposta["alvo"],
+            "prazo_maximo_dias": proposta.get("prazo_maximo_dias", 20),
+        })
+        salvar_posicoes(posicoes)
+        return posicao, f"ℹ️ {ticker} já estava registrada — atualizada com os valores da proposta de {proposta['data_proposta']} (entrada R$ {posicao['preco_entrada']} · stop R$ {posicao['stop']} · alvo R$ {posicao['alvo']})."
+
+    posicao = {
+        "ticker": ticker,
+        "direcao": proposta["direcao"],
+        "preco_entrada": proposta["preco_entrada"],
+        "stop": proposta["stop"],
+        "alvo": proposta["alvo"],
+        "quantidade": quantidade,
+        "data_entrada": date.today().isoformat(),
+        "prazo_maximo_dias": proposta.get("prazo_maximo_dias", 20),
+    }
+    posicoes[ticker] = posicao
+    salvar_posicoes(posicoes)
+    return posicao, f"✅ <b>{ticker}</b> registrada ({posicao['direcao']}). Entrada R$ {posicao['preco_entrada']} · Stop R$ {posicao['stop']} · Alvo R$ {posicao['alvo']}. Agora acompanho todo dia."
 
 
 def adicionar_posicao(ticker: str, direcao: str, preco_entrada: float,
