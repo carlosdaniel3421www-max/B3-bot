@@ -42,6 +42,11 @@ GEMINI_MAX_RETRIES = int(
 )
 USAR_IA_ANALISE = True
 
+# --- IA híbrida: Gemini descreve o gráfico (grátis) + DeepSeek raciocina ---
+# Chave em platform.deepseek.com (custa centavos). Sem ela, volta pro Gemini puro.
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
+
 # --- Screener ---
 # Ativos que você opera.
 WATCHLIST = [

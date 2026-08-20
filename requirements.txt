@@ -6,4 +6,5 @@ feedparser
 requests
 mplfinance
 google-genai
+openai
 schedule

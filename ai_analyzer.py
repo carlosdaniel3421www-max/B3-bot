@@ -64,6 +64,8 @@ class AIAnalyzer:
         model: Optional[str] = None,
         timeout_seconds: int = 45,
         max_retries: int = 3,
+        deepseek_api_key: str = "",
+        deepseek_model: str = "deepseek-v4-flash",
     ):
 
         self.api_key = api_key
@@ -73,6 +75,10 @@ class AIAnalyzer:
         self.timeout_seconds = timeout_seconds
 
         self.max_retries = max_retries
+
+        self.deepseek_api_key = deepseek_api_key
+
+        self.deepseek_model = deepseek_model
 
         self._client = None
 
@@ -213,6 +219,21 @@ class AIAnalyzer:
 
         modelos_para_tentar = list(dict.fromkeys([self.model, *self.MODELOS_FALLBACK]))
         indice_modelo = 0
+
+        # --- HÍBRIDO: tenta DeepSeek (raciocínio forte) primeiro ---
+        # O Gemini só descreve o gráfico; o DeepSeek faz a análise final.
+        if self.deepseek_api_key:
+            resposta_deepseek = self._call_deepseek(prompt, chart_path)
+            if resposta_deepseek:
+                return self._validate_response(
+                    resposta_deepseek,
+                    direction,
+                    score
+                )
+            logger.warning(
+                "DeepSeek indisponível (%s) — voltando pro Gemini puro.",
+                self.ultimo_erro,
+            )
 
         for attempt in range(1, self.max_retries + 1):
 
@@ -838,6 +859,148 @@ Dados do robô:
 
 
 
+
+
+    def _descrever_grafico_gemini(
+        self,
+        chart_path: Optional[str | Path] = None
+    ) -> str:
+        """
+        HÍBRIDO — passo 1: usa o Gemini (modelo gratuito) apenas para
+        DESCREVER o gráfico em texto, já que o DeepSeek não enxerga imagens.
+
+        Retorna a descrição textual (vazia se não houver imagem ou falhar).
+        """
+        if not chart_path:
+            return ""
+
+        caminho = Path(chart_path)
+        if not caminho.exists():
+            return ""
+
+        client = self._get_client()
+        if not client:
+            return ""
+
+        try:
+            from google.genai import types
+
+            imagem = caminho.read_bytes()
+
+            resposta = client.models.generate_content(
+                model="gemini-2.5-flash-lite",
+                contents=[
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part.from_text(
+                                text=(
+                                    "Descreva ESTE gráfico de candlestick de forma técnica "
+                                    "e objetiva em português (máximo 6 linhas): tendência, "
+                                    "padrões de candle visíveis, toque em suporte/resistência, "
+                                    "comportamento do volume, sinais de exaustão ou reversão. "
+                                    "Sem opinião de compra/venda — só descrição factual do gráfico."
+                                )
+                            ),
+                            types.Part.from_bytes(
+                                data=imagem,
+                                mime_type="image/png"
+                            ),
+                        ],
+                    )
+                ],
+            )
+
+            if resposta and resposta.text:
+                return resposta.text.strip()
+
+        except Exception as e:
+            logger.warning(
+                "Falha ao descrever gráfico com Gemini: %s",
+                e,
+                exc_info=True,
+            )
+
+        return ""
+
+    def _call_deepseek(
+        self,
+        prompt: str,
+        chart_path: Optional[str | Path] = None,
+    ) -> Optional[dict[str, Any]]:
+        """
+        HÍBRIDO — passo 2: chama o DeepSeek (raciocínio forte) com os dados
+        técnicos + a descrição do gráfico feita pelo Gemini.
+
+        Retorna o JSON da análise. None se falhar (aí o fluxo volta pro
+        Gemini puro, que enxerga a imagem).
+        """
+        if not self.deepseek_api_key:
+            return None
+
+        try:
+            from openai import OpenAI
+        except ImportError:
+            self.ultimo_erro = "Pacote 'openai' não instalado (necessário pro DeepSeek)"
+            return None
+
+        try:
+            descricao_grafico = self._descrever_grafico_gemini(chart_path)
+
+            prompt_final = prompt
+            if descricao_grafico:
+                prompt_final += (
+                    "\n\n===== DESCRIÇÃO DO GRÁFICO (feita por um modelo de visão) =====\n"
+                    f"{descricao_grafico}\n"
+                    "Use essa descrição como apoio visual. Lembre-se: a regra de "
+                    "consistência com o score_robo continua valendo."
+                )
+
+            client = OpenAI(
+                api_key=self.deepseek_api_key,
+                base_url="https://api.deepseek.com",
+                timeout=self.timeout_seconds,
+            )
+
+            resposta = client.chat.completions.create(
+                model=self.deepseek_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Você é um analista técnico de ações experiente. "
+                            "Responda APENAS com JSON válido, sem texto antes ou depois."
+                        ),
+                    },
+                    {"role": "user", "content": prompt_final},
+                ],
+                temperature=0.15,
+                max_tokens=1200,
+                response_format={"type": "json_object"},
+            )
+
+            texto = resposta.choices[0].message.content if resposta.choices else None
+            if not texto:
+                return None
+
+            return self._extract_json(texto)
+
+        except Exception as e:
+            codigo_http = (
+                getattr(e, "status_code", None)
+                or getattr(e, "code", None)
+                or getattr(e, "status", None)
+            )
+            self.ultimo_erro = (
+                f"DeepSeek ({self.deepseek_model}) falhou "
+                f"(status={codigo_http}, tipo={type(e).__name__}): {e}"
+            )
+            logger.warning(
+                "Erro chamada DeepSeek: %s",
+                e,
+                exc_info=True,
+            )
+            return None
 
 
     def _extract_json(

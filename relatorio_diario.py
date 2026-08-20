@@ -158,6 +158,8 @@ def _montar_analisador_ia() -> AIAnalyzer | None:
         model=getattr(config, "GEMINI_MODEL", None),
         timeout_seconds=getattr(config, "GEMINI_TIMEOUT_SECONDS", 45),
         max_retries=getattr(config, "GEMINI_MAX_RETRIES", 3),
+        deepseek_api_key=getattr(config, "DEEPSEEK_API_KEY", ""),
+        deepseek_model=getattr(config, "DEEPSEEK_MODEL", "deepseek-v4-flash"),
     )
 
 
