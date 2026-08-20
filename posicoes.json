@@ -1,1 +1,12 @@
-{}
+{
+  "PETR4": {
+    "ticker": "PETR4",
+    "direcao": "compra",
+    "preco_entrada": 43.11,
+    "stop": 40.5,
+    "alvo": 48.22,
+    "quantidade": 100,
+    "data_entrada": "2026-08-20",
+    "prazo_maximo_dias": 20
+  }
+}
