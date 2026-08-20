@@ -238,8 +238,14 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
         else:
             provedor = getattr(analisador, "ultimo_provedor", "gemini")
             etiqueta_ia = "DeepSeek V4 Flash Free" if provedor == "deepseek" else "Gemini"
+            linha_ia = f"{ticker}</b> — R$ {r['preco']:.2f} · <i>IA: {etiqueta_ia}</i>"
+            if provedor == "gemini":
+                motivo_deepseek = getattr(analisador, "ultimo_erro_deepseek", None)
+                if motivo_deepseek:
+                    motivo_curto = motivo_deepseek.split("): ")[-1][:120]
+                    linha_ia += f"\n<i>(DeepSeek: {motivo_curto})</i>"
             blocos_ia.append(
-                f"<b>{ticker}</b> — R$ {r['preco']:.2f} · <i>IA: {etiqueta_ia}</i>\n"
+                f"<b>{linha_ia}\n"
                 f"{analisador.format_telegram_message(resultado_ia)}"
             )
 

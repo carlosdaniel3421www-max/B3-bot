@@ -92,6 +92,11 @@ class AIAnalyzer:
         # "erro genérico" sem causa.
         self.ultimo_erro: Optional[str] = None
 
+        # Motivo pelo qual o DeepSeek não respondeu na última análise
+        # (None = não foi tentado ou funcionou). Ajuda a diagnosticar
+        # chave ausente/errada/limite no relatório do Telegram.
+        self.ultimo_erro_deepseek: Optional[str] = None
+
         # Provedor de IA que respondeu na última análise bem-sucedida:
         # "deepseek" (híbrido: Gemini descreveu o gráfico, DeepSeek analisou)
         # ou "gemini" (Gemini puro — DeepSeek sem chave/indisponível).
@@ -176,6 +181,13 @@ class AIAnalyzer:
 
 
         self.ultimo_erro = None
+
+        self.ultimo_erro_deepseek = None
+
+        if not self.deepseek_api_key:
+            self.ultimo_erro_deepseek = (
+                "chave DEEPSEEK_API_KEY ausente (secret não configurado no GitHub)"
+            )
 
         if not self.api_key:
 
@@ -1018,6 +1030,7 @@ Dados do robô:
                 f"DeepSeek ({self.deepseek_model}) falhou "
                 f"(status={codigo_http}, tipo={type(e).__name__}): {e}"
             )
+            self.ultimo_erro_deepseek = self.ultimo_erro
             logger.warning(
                 "Erro chamada DeepSeek: %s",
                 e,
