@@ -186,7 +186,7 @@ class AIAnalyzer:
 
         if not self.NEMOTRON_API_KEY:
             self.ultimo_erro_nemotron = (
-                "chave DEEPSEEK_API_KEY ausente (secret não configurado no GitHub)"
+                "chave NEMOTRON_API_KEY ausente (secret não configurado no GitHub)"
             )
 
         if not self.api_key:
