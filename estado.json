@@ -4,11 +4,6 @@
     "direcao": "venda",
     "data_primeiro_alerta": "2026-08-12"
   },
-  "RENT3": {
-    "score": 7,
-    "direcao": "venda",
-    "data_primeiro_alerta": "2026-08-12"
-  },
   "PRIO3": {
     "score": 6,
     "direcao": "compra",
@@ -35,7 +30,7 @@
     "data_primeiro_alerta": "2026-08-20"
   },
   "SUZB3": {
-    "score": 6,
+    "score": 7,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-20"
   }
