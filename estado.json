@@ -10,7 +10,7 @@
     "data_primeiro_alerta": "2026-08-12"
   },
   "RENT3": {
-    "score": 7,
+    "score": 8,
     "direcao": "venda",
     "data_primeiro_alerta": "2026-08-12"
   },
@@ -35,7 +35,7 @@
     "data_primeiro_alerta": "2026-08-20"
   },
   "PETR4": {
-    "score": 6,
+    "score": 7,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-20"
   },
@@ -43,5 +43,10 @@
     "score": 7,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-20"
+  },
+  "ITUB4": {
+    "score": 6,
+    "direcao": "venda",
+    "data_primeiro_alerta": "2026-08-21"
   }
 }
