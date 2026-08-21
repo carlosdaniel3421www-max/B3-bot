@@ -1,12 +1,22 @@
 {
   "PETR4": {
     "ticker": "PETR4",
-    "direcao": "compra",
-    "preco_entrada": 43.11,
-    "stop": 40.5,
-    "alvo": 48.22,
+    "direcao": "venda",
+    "preco_entrada": 11.07,
+    "stop": 11.4,
+    "alvo": 10.0,
     "quantidade": 100,
-    "data_entrada": "2026-08-20",
+    "data_entrada": "2026-08-21",
+    "prazo_maximo_dias": 20
+  },
+  "LRENT11": {
+    "ticker": "LRENT11",
+    "direcao": "venda",
+    "preco_entrada": 11.07,
+    "stop": 11.4,
+    "alvo": 10.0,
+    "quantidade": 100,
+    "data_entrada": "2026-08-21",
     "prazo_maximo_dias": 20
   }
 }
