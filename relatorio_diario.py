@@ -153,6 +153,9 @@ def _montar_analisador_ia() -> AIAnalyzer | None:
     if not api_key:
         return None
 
+    nemotron_key = getattr(config, "NEMOTRON_API_KEY", "")
+    print(f"[DEBUG] NEMOTRON_API_KEY length: {len(nemotron_key)}")
+    
     return AIAnalyzer(
         api_key=api_key,
         model=getattr(config, "GEMINI_MODEL", None),

@@ -243,12 +243,14 @@ class AIAnalyzer:
         # --- HÍBRIDO: tenta Nemotron (raciocínio forte) primeiro ---
         # O Gemini só descreve o gráfico; o Nemotron faz a análise final.
         if self.NEMOTRON_API_KEY:
+            print(f"[DEBUG] Calling Nemotron with model: {self.NEMOTRON_MODEL}")
             resposta_nemotron = self._call_nemotron(prompt, chart_path)
             if resposta_nemotron:
                 self.ultimo_provedor = "nemotron"
                 logger.info(
                     "Hybrid IA OK para o ativo: Nemotron (resposta válida) — regra de consistência aplicada"
                 )
+                print("[DEBUG] Nemotron responded successfully")
                 return self._validate_response(
                     resposta_nemotron,
                     direction,
@@ -258,6 +260,7 @@ class AIAnalyzer:
                 "Nemotron indisponível (%s) — voltando pro Gemini puro.",
                 self.ultimo_erro,
             )
+            print(f"[DEBUG] Nemotron failed: {self.ultimo_erro}")
             print("  [IA] Nemotron indisponível — usando Gemini puro")
 
         for attempt in range(1, self.max_retries + 1):
