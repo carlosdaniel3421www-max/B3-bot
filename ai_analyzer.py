@@ -1006,7 +1006,6 @@ Dados do robô:
                 ],
                 temperature=0.15,
                 max_tokens=1200,
-                response_format={"type": "json_object"},
             )
 
             texto = resposta.choices[0].message.content if resposta.choices else None
