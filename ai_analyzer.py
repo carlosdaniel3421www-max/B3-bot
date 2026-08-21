@@ -1013,13 +1013,17 @@ Dados do robô:
                 return None
 
             logger.info(
-                "Nemotron (.via.+) respondeu — análise feita pelo Nemotron V4 Flash Free",
+                "Nemotron (%s via %s) respondeu \u2014 análise feita pelo Nemotron",
                 self.CARLOS_model,
                 self.CARLOS_base_url,
             )
             print(f"  [IA] Análise feita pelo Nemotron ({self.CARLOS_model})")
+            print(f"[DEBUG] Raw Nemotron response: {texto[:300]}")
 
-            return self._extract_json(texto)
+            resultado = self._extract_json(texto)
+            if resultado is None:
+                self.ultimo_erro = f"Falha ao parsear JSON do Nemotron. Resposta: {texto[:300]}"
+            return resultado
 
         except Exception as e:
             codigo_http = (
