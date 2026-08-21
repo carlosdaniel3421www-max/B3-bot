@@ -1076,9 +1076,34 @@ Dados do robô:
                 except json.JSONDecodeError:
                     continue
 
-        # Estratégia 3: Procura por objeto JSON embutido no texto ({ ... })
+        # Estratégia 3: Procura por JSON com campos esperados da resposta
         import re
-        matches = re.findall(r'\{.*\}', texto, re.DOTALL)
+        padroes_campos = [
+            r'\{[^{}]*"concorda_com_robo"[^{}]*\}',
+            r'\{[^{}]*"vale_operar"[^{}]*\}',
+            r'\{[^{}]*"entrada_agora"[^{}]*\}',
+            r'\{[^{}]*"preco_ideal_entrada"[^{}]*\}',
+            r'\{[^{}]*"setup"[^{}]*\}',
+        ]
+
+        for padrao in padroes_campos:
+            matches = re.findall(padrao, texto, re.DOTALL)
+            for match in matches:
+                try:
+                    return json.loads(match)
+                except json.JSONDecodeError:
+                    continue
+
+        # Fallback 1: JSON simples não guloso ({...} sem { } aninhados)
+        matches = re.findall(r'\{[^{}]*\}', texto)
+        for match in matches:
+            try:
+                return json.loads(match)
+            except json.JSONDecodeError:
+                continue
+
+        # Fallback 2: padrão com um nível de aninhamento
+        matches = re.findall(r'\{[^{}]*\{[^{}]*\}\}[^{}]*\}', texto)
         for match in matches:
             try:
                 return json.loads(match)
