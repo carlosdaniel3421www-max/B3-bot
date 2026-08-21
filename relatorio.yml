@@ -28,7 +28,7 @@ jobs:
       - name: Verificar chaves configuradas
         run: |
           echo "GEMINI_API_KEY comprimento: ${#GEMINI_API_KEY}"
-          echo "NEMOTRON_API_KEY comprimento: ${#NEMOTRON_API_KEY}"
+          echo "carlos comprimento: ${#carlos}"
 
       - name: Rodar relatório diário
         env:
@@ -36,7 +36,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           OPLAB_TOKEN: ${{ secrets.OPLAB_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          NEMOTRON_API_KEY: ${{ secrets.NEMOTRON_API_KEY }}
+          carlos: ${{ secrets.carlos }}
         run: python relatorio_diario.py
 
       - name: Salvar histórico de alertas e propostas
