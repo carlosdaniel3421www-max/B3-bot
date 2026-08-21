@@ -28,6 +28,7 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CARLOS: ${{ secrets.CARLOS }}
         run: python relatorio_diario.py
 
       - name: Salvar histórico de alertas (estado.json)
