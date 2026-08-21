@@ -158,9 +158,9 @@ def _montar_analisador_ia() -> AIAnalyzer | None:
         model=getattr(config, "GEMINI_MODEL", None),
         timeout_seconds=getattr(config, "GEMINI_TIMEOUT_SECONDS", 45),
         max_retries=getattr(config, "GEMINI_MAX_RETRIES", 3),
-        deepseek_api_key=getattr(config, "DEEPSEEK_API_KEY", ""),
-        deepseek_model=getattr(config, "DEEPSEEK_MODEL", "deepseek-v4-flash-free"),
-        deepseek_base_url=getattr(config, "DEEPSEEK_BASE_URL", "https://opencode.ai/zen/v1"),
+        nemotron_api_key=getattr(config, "NEMOTRON_API_KEY", ""),
+        nemotron_model=getattr(config, "NEMOTRON_MODEL", "nemotron-3-ultra-free"),
+        nemotron_base_url=getattr(config, "NEMOTRON_BASE_URL", "https://opencode.ai/zen/v1"),
     )
 
 
@@ -237,13 +237,13 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
             )
         else:
             provedor = getattr(analisador, "ultimo_provedor", "gemini")
-            etiqueta_ia = "DeepSeek V4 Flash Free" if provedor == "deepseek" else "Gemini"
+            etiqueta_ia = "Nemotron 3 Ultra Free" if provedor == "nemotron" else "Gemini"
             linha_ia = f"{ticker}</b> — R$ {r['preco']:.2f} · <i>IA: {etiqueta_ia}</i>"
             if provedor == "gemini":
-                motivo_deepseek = getattr(analisador, "ultimo_erro_deepseek", None)
-                if motivo_deepseek:
-                    motivo_curto = motivo_deepseek.split("): ")[-1][:120]
-                    linha_ia += f"\n<i>(DeepSeek: {motivo_curto})</i>"
+                motivo_nemotron = getattr(analisador, "ultimo_erro_deepseek", None)
+                if motivo_nemotron:
+                    motivo_curto = motivo_nemotron.split("): ")[-1][:120]
+                    linha_ia += f"\n<i>(Nemotron: {motivo_curto})</i>"
             blocos_ia.append(
                 f"<b>{linha_ia}\n"
                 f"{analisador.format_telegram_message(resultado_ia)}"

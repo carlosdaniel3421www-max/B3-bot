@@ -42,13 +42,13 @@ GEMINI_MAX_RETRIES = int(
 )
 USAR_IA_ANALISE = True
 
-# --- IA híbrida: Gemini descreve o gráfico (grátis) + DeepSeek V4 Flash Free ---
+# --- IA híbrida: Gemini descreve o gráfico (grátis) + Nemotron 3 Ultra Free ---
 # Chave GRÁTIS do opencode zen (https://opencode.ai/auth -> Keys):
 # mesmo modelo que o opencode usa. Sem cartão de crédito.
 # Sem chave, volta pro Gemini puro.
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash-free")
-DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://opencode.ai/zen/v1")
+NEMOTRON_API_KEY = os.environ.get("NEMOTRON_API_KEY", "")
+NEMOTRON_MODEL = os.environ.get("NEMOTRON_MODEL", "nemotron-3-ultra-free")
+NEMOTRON_BASE_URL = os.environ.get("NEMOTRON_BASE_URL", "https://opencode.ai/zen/v1")
 
 # --- Screener ---
 # Ativos que você opera.
