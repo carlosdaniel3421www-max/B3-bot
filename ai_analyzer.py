@@ -64,9 +64,9 @@ class AIAnalyzer:
         model: Optional[str] = None,
         timeout_seconds: int = 45,
         max_retries: int = 3,
-        deepseek_api_key: str = "",
-        deepseek_model: str = "deepseek-v4-flash-free",
-        deepseek_base_url: str = "https://opencode.ai/zen/v1",
+        nemotron_api_key: str = "",
+        nemotron_model: str = "nemotron-3.5-free",
+        nemotron_base_url: str = "https://opencode.ai/zen/v1",
     ):
 
         self.api_key = api_key
@@ -77,11 +77,11 @@ class AIAnalyzer:
 
         self.max_retries = max_retries
 
-        self.deepseek_api_key = deepseek_api_key
+        self.NEMOTRON_API_KEY = nemotron_api_key
 
-        self.deepseek_model = deepseek_model
+        self.NEMOTRON_MODEL = nemotron_model
 
-        self.deepseek_base_url = deepseek_base_url
+        self.NEMOTRON_BASE_URL = nemotron_base_url
 
         self._client = None
 
@@ -92,14 +92,14 @@ class AIAnalyzer:
         # "erro genérico" sem causa.
         self.ultimo_erro: Optional[str] = None
 
-        # Motivo pelo qual o DeepSeek não respondeu na última análise
+        # Motivo pelo qual o Nemotron não respondeu na última análise
         # (None = não foi tentado ou funcionou). Ajuda a diagnosticar
         # chave ausente/errada/limite no relatório do Telegram.
-        self.ultimo_erro_deepseek: Optional[str] = None
+        self.ultimo_erro_nemotron: Optional[str] = None
 
         # Provedor de IA que respondeu na última análise bem-sucedida:
-        # "deepseek" (híbrido: Gemini descreveu o gráfico, DeepSeek analisou)
-        # ou "gemini" (Gemini puro — DeepSeek sem chave/indisponível).
+        # "nemotron" (híbrido: Gemini descreveu o gráfico, Nemotron analisou)
+        # ou "gemini" (Gemini puro — Nemotron sem chave/indisponível).
         self.ultimo_provedor: str = "gemini"
 
 
@@ -182,10 +182,10 @@ class AIAnalyzer:
 
         self.ultimo_erro = None
 
-        self.ultimo_erro_deepseek = None
+        self.ultimo_erro_nemotron = None
 
-        if not self.deepseek_api_key:
-            self.ultimo_erro_deepseek = (
+        if not self.NEMOTRON_API_KEY:
+            self.ultimo_erro_nemotron = (
                 "chave DEEPSEEK_API_KEY ausente (secret não configurado no GitHub)"
             )
 
@@ -240,25 +240,25 @@ class AIAnalyzer:
         modelos_para_tentar = list(dict.fromkeys([self.model, *self.MODELOS_FALLBACK]))
         indice_modelo = 0
 
-        # --- HÍBRIDO: tenta DeepSeek (raciocínio forte) primeiro ---
-        # O Gemini só descreve o gráfico; o DeepSeek faz a análise final.
-        if self.deepseek_api_key:
-            resposta_deepseek = self._call_deepseek(prompt, chart_path)
-            if resposta_deepseek:
-                self.ultimo_provedor = "deepseek"
+        # --- HÍBRIDO: tenta Nemotron (raciocínio forte) primeiro ---
+        # O Gemini só descreve o gráfico; o Nemotron faz a análise final.
+        if self.NEMOTRON_API_KEY:
+            resposta_nemotron = self._call_nemotron(prompt, chart_path)
+            if resposta_nemotron:
+                self.ultimo_provedor = "nemotron"
                 logger.info(
-                    "Hybrid IA OK para o ativo: DeepSeek (resposta válida) — regra de consistência aplicada"
+                    "Hybrid IA OK para o ativo: Nemotron (resposta válida) — regra de consistência aplicada"
                 )
                 return self._validate_response(
-                    resposta_deepseek,
+                    resposta_nemotron,
                     direction,
                     score
                 )
             logger.warning(
-                "DeepSeek indisponível (%s) — voltando pro Gemini puro.",
+                "Nemotron indisponível (%s) — voltando pro Gemini puro.",
                 self.ultimo_erro,
             )
-            print("  [IA] DeepSeek indisponível — usando Gemini puro")
+            print("  [IA] Nemotron indisponível — usando Gemini puro")
 
         for attempt in range(1, self.max_retries + 1):
 
@@ -894,7 +894,7 @@ Dados do robô:
     ) -> str:
         """
         HÍBRIDO — passo 1: usa o Gemini (modelo gratuito) apenas para
-        DESCREVER o gráfico em texto, já que o DeepSeek não enxerga imagens.
+        DESCREVER o gráfico em texto, já que o Nemotron não enxerga imagens.
 
         Retorna a descrição textual (vazia se não houver imagem ou falhar).
         """
@@ -950,25 +950,25 @@ Dados do robô:
 
         return ""
 
-    def _call_deepseek(
+    def _call_nemotron(
         self,
         prompt: str,
         chart_path: Optional[str | Path] = None,
     ) -> Optional[dict[str, Any]]:
         """
-        HÍBRIDO — passo 2: chama o DeepSeek (raciocínio forte) com os dados
+        HÍBRIDO — passo 2: chama o Nemotron (raciocínio forte) com os dados
         técnicos + a descrição do gráfico feita pelo Gemini.
 
         Retorna o JSON da análise. None se falhar (aí o fluxo volta pro
         Gemini puro, que enxerga a imagem).
         """
-        if not self.deepseek_api_key:
+        if not self.NEMOTRON_API_KEY:
             return None
 
         try:
             from openai import OpenAI
         except ImportError:
-            self.ultimo_erro = "Pacote 'openai' não instalado (necessário pro DeepSeek)"
+            self.ultimo_erro = "Pacote 'openai' não instalado (necessário pro Nemotron)"
             return None
 
         try:
@@ -984,13 +984,13 @@ Dados do robô:
                 )
 
             client = OpenAI(
-                api_key=self.deepseek_api_key,
-                base_url=self.deepseek_base_url,
+                api_key=self.NEMOTRON_API_KEY,
+                base_url=self.NEMOTRON_BASE_URL,
                 timeout=self.timeout_seconds,
             )
 
             resposta = client.chat.completions.create(
-                model=self.deepseek_model,
+                model=self.NEMOTRON_MODEL,
                 messages=[
                     {
                         "role": "system",
@@ -1011,11 +1011,11 @@ Dados do robô:
                 return None
 
             logger.info(
-                "DeepSeek (%s via %s) respondeu — análise feita pelo DeepSeek V4 Flash Free",
-                self.deepseek_model,
-                self.deepseek_base_url,
+                "Nemotron (.via.+) respondeu — análise feita pelo Nemotron V4 Flash Free",
+                self.NEMOTRON_MODEL,
+                self.NEMOTRON_BASE_URL,
             )
-            print(f"  [IA] Análise feita pelo DeepSeek ({self.deepseek_model})")
+            print(f"  [IA] Análise feita pelo Nemotron ({self.NEMOTRON_MODEL})")
 
             return self._extract_json(texto)
 
@@ -1026,12 +1026,12 @@ Dados do robô:
                 or getattr(e, "status", None)
             )
             self.ultimo_erro = (
-                f"DeepSeek ({self.deepseek_model}) falhou "
+                f"Nemotron ({self.NEMOTRON_MODEL}) falhou "
                 f"(status={codigo_http}, tipo={type(e).__name__}): {e}"
             )
-            self.ultimo_erro_deepseek = self.ultimo_erro
+            self.ultimo_erro_nemotron = self.ultimo_erro
             logger.warning(
-                "Erro chamada DeepSeek: %s",
+                "Erro chamada Nemotron: %s",
                 e,
                 exc_info=True,
             )
