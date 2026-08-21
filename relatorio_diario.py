@@ -153,17 +153,17 @@ def _montar_analisador_ia() -> AIAnalyzer | None:
     if not api_key:
         return None
 
-    nemotron_key = getattr(config, "carlos", "")
-    print(f"[DEBUG] carlos length: {len(nemotron_key)}")
+    nemotron_key = getattr(config, "CARLOS", "")
+    print(f"[DEBUG] CARLOS length: {len(nemotron_key)}")
     
     return AIAnalyzer(
         api_key=api_key,
         model=getattr(config, "GEMINI_MODEL", None),
         timeout_seconds=getattr(config, "GEMINI_TIMEOUT_SECONDS", 45),
         max_retries=getattr(config, "GEMINI_MAX_RETRIES", 3),
-        carlos=getattr(config, "carlos", ""),
-        carlos_model=getattr(config, "carlos_model", "nemotron-3-ultra-free"),
-        carlos_base_url=getattr(config, "carlos_base_url", "https://opencode.ai/zen/v1"),
+        CARLOS=getattr(config, "CARLOS", ""),
+        CARLOS_model=getattr(config, "CARLOS_model", "nemotron-3-ultra-free"),
+        CARLOS_base_url=getattr(config, "CARLOS_base_url", "https://opencode.ai/zen/v1"),
     )
 
 
