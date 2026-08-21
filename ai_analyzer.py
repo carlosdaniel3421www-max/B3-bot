@@ -1047,71 +1047,49 @@ Dados do robô:
     def _extract_json(
         self,
         texto: str
-
     ) -> Optional[dict[str, Any]]:
 
         """
-        Limpa resposta do Gemini.
-
-        Às vezes ele manda:
-
-        ```json
-        {...}
-        ```
-
-        mesmo pedindo JSON puro.
+        Extrai JSON da resposta. Tenta múltiplas estratégias:
+        1. JSON direto
+        2. JSON dentro de blocos markdown ```json ... ```
+        3. JSON embutido em texto (procura por { ... })
         """
 
-
         texto = texto.strip()
 
-
-
-        if "```" in texto:
-
-            partes = texto.split(
-                "```"
-            )
-
-
-            if len(partes) >= 2:
-
-                texto = partes[1]
-
-
-                if texto.startswith(
-                    "json"
-                ):
-
-                    texto = texto[4:]
-
-
-
-        texto = texto.strip()
-
-
-
+        # Estratégia 1: JSON direto
         try:
-
-            return json.loads(
-                texto
-            )
-
-
+            return json.loads(texto)
         except json.JSONDecodeError:
+            pass
 
+        # Estratégia 2: JSON em bloco markdown ```json ... ```
+        if "```" in texto:
+            partes = texto.split("```")
+            for parte in partes:
+                parte = parte.strip()
+                if parte.startswith("json"):
+                    parte = parte[4:].strip()
+                try:
+                    return json.loads(parte)
+                except json.JSONDecodeError:
+                    continue
 
-            logger.warning(
+        # Estratégia 3: Procura por objeto JSON embutido no texto ({ ... })
+        import re
+        matches = re.findall(r'\{.*\}', texto, re.DOTALL)
+        for match in matches:
+            try:
+                return json.loads(match)
+            except json.JSONDecodeError:
+                continue
 
-                "Gemini retornou JSON inválido: %s",
-
-                texto[:300]
-
-            )
-
-
-            return None
-
+        logger.warning(
+            "Nemotron/Gemini retornou JSON inválido: %s",
+            texto[:300]
+        )
+        return None
     def _validate_response(
         self,
         data: dict[str, Any],
