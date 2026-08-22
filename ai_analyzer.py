@@ -1053,7 +1053,9 @@ Dados do robô:
         Extrai JSON da resposta. Tenta múltiplas estratégias:
         1. JSON direto
         2. JSON dentro de blocos markdown ```json ... ```
-        3. JSON embutido em texto (procura por { ... })
+        3. JSON com campos esperados da resposta (concorda_com_robo, etc.)
+        4. JSON no final da resposta (onde o Nemotron costuma colocar)
+        5. JSON embutido no texto (padrão não guloso)
         """
 
         texto = texto.strip()
@@ -1088,15 +1090,29 @@ Dados do robô:
 
         for padrao in padroes_campos:
             matches = re.findall(padrao, texto, re.DOTALL)
-            for match in matches:
+            for match in reversed(matches):  # Tenta do final para o início
                 try:
                     return json.loads(match)
                 except json.JSONDecodeError:
                     continue
 
+        # Estratégia 4: Procura JSON no final da resposta (onde o Nemotron costuma colocar)
+        # Procura pelo último { que abre um JSON válido
+        last_brace_idx = -1
+        for i, char in enumerate(texto):
+            if char == '{':
+                last_brace_idx = i
+        
+        if last_brace_idx >= 0:
+            # Tenta parsear a partir do último {
+            try:
+                return json.loads(texto[last_brace_idx:])
+            except json.JSONDecodeError:
+                pass
+
         # Fallback 1: JSON simples não guloso ({...} sem { } aninhados)
         matches = re.findall(r'\{[^{}]*\}', texto)
-        for match in matches:
+        for match in reversed(matches):
             try:
                 return json.loads(match)
             except json.JSONDecodeError:
@@ -1104,7 +1120,7 @@ Dados do robô:
 
         # Fallback 2: padrão com um nível de aninhamento
         matches = re.findall(r'\{[^{}]*\{[^{}]*\}\}[^{}]*\}', texto)
-        for match in matches:
+        for match in reversed(matches):
             try:
                 return json.loads(match)
             except json.JSONDecodeError:
