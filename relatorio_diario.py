@@ -243,7 +243,7 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
             etiqueta_ia = "Nemotron 3 Ultra Free" if provedor == "nemotron" else "Gemini"
             linha_ia = f"{ticker}</b> — R$ {r['preco']:.2f} · <i>IA: {etiqueta_ia}</i>"
             if provedor == "gemini":
-                motivo_nemotron = getattr(analisador, "ultimo_erro_deepseek", None)
+                motivo_nemotron = getattr(analisador, "ultimo_erro_nemotron", None)
                 if motivo_nemotron:
                     motivo_curto = motivo_nemotron.split("): ")[-1][:120]
                     linha_ia += f"\n<i>(Nemotron: {motivo_curto})</i>"
