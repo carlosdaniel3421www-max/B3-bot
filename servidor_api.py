@@ -106,19 +106,28 @@ def _configurar_webhook():
     global WEBHOOK_URL
     import requests
 
-    # Descobre a URL pública do Replit
-    # O Replit disponibiliza a URL em REPLIT_DEV_DOMAIN
-    dominio = os.environ.get("REPLIT_DEV_DOMAIN")
+    # Detecta a URL pública (Render, Replit, ou manual)
+    dominio = (
+        os.environ.get("RENDER_EXTERNAL_URL")       # Render
+        or os.environ.get("REPLIT_DEV_DOMAIN")       # Replit
+        or os.environ.get("WEBHOOK_URL")             # manual (configurar no secret)
+    )
     if dominio:
-        WEBHOOK_URL = f"https://{dominio}/webhook"
+        # Remove barra no final se tiver
+        dominio = dominio.rstrip("/")
+        if "/webhook" not in dominio:
+            WEBHOOK_URL = f"{dominio}/webhook"
+        else:
+            WEBHOOK_URL = dominio
+        logger.info("URL detectada: %s", WEBHOOK_URL)
     else:
-        # Fallback: tenta detectar
-        logger.warning("REPLIT_DEV_DOMAIN não encontrado. Configure manualmente.")
-        logger.info("Após rodar, execute:")
+        logger.warning("URL do servidor não detectada. Configure manualmente.")
+        logger.info("Após rodar, execute este comando no terminal (substitua SUA_URL):")
         logger.info("  curl -X POST https://api.telegram.org/bot%s/setWebhook?url=SUA_URL/webhook", TOKEN)
         return False
 
     # Remove webhook antigo e registra o novo
+    import requests
     url = f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={WEBHOOK_URL}"
     try:
         r = requests.get(url)
