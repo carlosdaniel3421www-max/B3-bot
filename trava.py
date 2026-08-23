@@ -7,12 +7,13 @@ limitado. Usa a mesma lógica de opções do projeto:
 - TRAVA DE BAIXA (Bear Put Spread): COMPRA uma PUT OTM + VENDE uma PUT
   mais longe. Custa menos que comprar a PUT sozinha e limita o ganho.
 
-ESTRATÉGIA DO USUÁRIO (swing trade com opções OTM):
-  - Compra a perna OTM perto do preço atual (ex: ativo em R$ 45, compra
-    strike ~46-47) — paga barato.
-  - Vende a perna mais longe (strike ~+5%) pra reduzir o custo.
+ESTRATÉGIA REAL DO USUÁRIO (opções BEM OTM, baratas):
+  - Compra opções FORA do dinheiro com prêmio pequeno (~R$ 0,20-0,30 por
+    contrato) — não usa percentual fixo de strike, busca o prêmio barato.
+  - Opera ~100 contratos: gasto total ~R$ 20-40 no máximo.
   - Encerra quando o preço do ativo se aproxima do strike comprado (a opção
     OTM valoriza forte com o gamma) — não espera o vencimento.
+  - A perna vendida (mais longe) reduz ainda mais o custo líquido.
 
 IMPORTANTE: sem OpLab conectada, o prêmio é ESTIMATIVA teórica
 (Black-Scholes com volatilidade histórica) — nunca cotação real de mercado.
@@ -22,6 +23,12 @@ import logging
 import math
 
 logger = logging.getLogger(__name__)
+
+# Teto de gasto total padrão do usuário (100 contratos)
+CONTRATOS_PADRAO = 100
+GASTO_MAXIMO_PADRAO = 40.0
+PREMI0_ALVO_PERNA1 = 0.25   # prêmio-alvo da perna comprada (~R$ 0,25)
+PREMI0_ALVO_PERNA2 = 0.08   # prêmio-alvo da perna vendida (~R$ 0,08)
 
 
 def _premio_bs_europeu(S, K, T, r, sigma, tipo):
@@ -58,95 +65,167 @@ def estimar_premio(preco_atual: float, strike: float, dias_venc: int,
     return round(premio, 2)
 
 
-def _lotes_strikes(preco_atual: float, pct_perna1: float, pct_perna2: float):
-    """
-    Ajusta os strikes para a grade real da B3 (múltiplos de 0.50 até 10,
-    múltiplos de 1.00 acima de 10). Retorna strikes "de mercado".
-    """
-    def _arredondar(valor):
-        if valor <= 10:
-            return round(valor * 2) / 2.0  # múltiplo de 0.50
-        return round(valor)  # múltiplo de 1.00
+def _arredondar_strike(valor):
+    """Ajusta strike para a grade real da B3 (0.50 até R$10, 1.00 acima)."""
+    if valor <= 10:
+        return round(valor * 2) / 2.0
+    return round(valor)
 
-    perna1 = _arredondar(preco_atual * pct_perna1)
-    perna2 = _arredondar(preco_atual * pct_perna2)
 
-    # Garante ordem correta (perna1 mais perto do preço, perna2 mais longe)
-    if perna1 == perna2:
-        perna2 = _arredondar(perna1 + 1.0)
-    return perna1, perna2
+def _proximo_strike(strike, direcao):
+    """
+    Retorna o próximo strike da grade da B3, SEMPRE avançando na direção.
+    Para strikes > R$ 10 a grade é de R$ 1.00; para <= R$ 10 é R$ 0.50.
+    """
+    if strike <= 10:
+        passo = 0.5
+    else:
+        passo = 1.0
+    if direcao == "cima":
+        novo = strike + passo
+    else:
+        novo = strike - passo
+    arredondado = _arredondar_strike(novo)
+    # Garante que sempre avança (round do Python pode empacar em .5)
+    if direcao == "cima" and arredondado <= strike:
+        arredondado = _arredondar_strike(strike + passo + passo)
+    elif direcao == "baixo" and arredondado >= strike:
+        arredondado = _arredondar_strike(strike - passo - passo)
+    return arredondado
+
+
+def _encontrar_strike_por_premio(preco_atual, dias_venc, tipo, premio_alvo,
+                                 sigma, max_passos=80):
+    """
+    Encontra o strike cujo prêmio estimado fica MAIS PRÓXIMO do premio_alvo.
+    Caminha progressivamente OTM (afastando do preço atual) e escolhe o
+    strike com o menor |prêmio - alvo|.
+    """
+    if tipo == "call":
+        melhor = None
+        melhor_dist = float("inf")
+        strike = _arredondar_strike(preco_atual)
+        for _ in range(max_passos):
+            premio = estimar_premio(preco_atual, strike, dias_venc, "call", sigma)
+            dist = abs(premio - premio_alvo)
+            if dist < melhor_dist:
+                melhor_dist = dist
+                melhor = strike
+            # Se o prêmio chegou a zero, parou de afastar
+            if premio <= 0.01:
+                break
+            strike = _proximo_strike(strike, "cima")
+        return melhor if melhor is not None else _arredondar_strike(preco_atual + 1.0)
+    else:
+        melhor = None
+        melhor_dist = float("inf")
+        strike = _arredondar_strike(preco_atual)
+        for _ in range(max_passos):
+            premio = estimar_premio(preco_atual, strike, dias_venc, "put", sigma)
+            dist = abs(premio - premio_alvo)
+            if dist < melhor_dist:
+                melhor_dist = dist
+                melhor = strike
+            if premio <= 0.01:
+                break
+            strike = _proximo_strike(strike, "baixo")
+        return melhor if melhor is not None else _arredondar_strike(preco_atual - 1.0)
 
 
 def montar_trava(preco_atual: float, direcao: str,
-                 pct_perna1: float = None, pct_perna2: float = None,
+                 premio_alvo_perna1: float = None, premio_alvo_perna2: float = None,
+                 contratos: int = CONTRATOS_PADRAO,
+                 gasto_maximo: float = GASTO_MAXIMO_PADRAO,
                  dias_venc: int = 35, sigma: float = 0.30) -> dict:
     """
-    Monta uma trava (Bull Call Spread ou Bear Put Spread) com base no preço
-    atual e na direção do sinal.
+    Monta uma trava baseada em PRÊMIO-ALVO (estratégia do usuário de comprar
+    opções baratas OTM).
 
-    pct_perna1: % sobre o preço para a perna COMPRADA (default compra 3% OTM,
-                venda 3% ITM — na prática o usuário gosta de OTM: ~2-4%).
-    pct_perna2: % sobre o preço para a perna VENDIDA (mais longe).
+    - A perna COMPRADA é o strike cujo prêmio estimado ≈ premio_alvo_perna1
+      (default R$ 0,25) — opção barata, bem fora do dinheiro.
+    - A perna VENDIDA é o strike ainda mais OTM com prêmio ≈ premio_alvo_perna2
+      (default R$ 0,08), reduzindo o custo líquido.
+    - `contratos` (default 100) e `gasto_maximo` (default R$ 40) refletem a
+      forma como o usuário opera.
 
-    Retorna dict com as duas pernas, prêmios, risco máx, ganho máx e breakeven.
+    Retorna dict com as duas pernas, prêmios, custo total, risco e ganho.
     """
     direcao = direcao.lower()
     if direcao not in ("compra", "venda"):
         raise ValueError("direcao deve ser 'compra' ou 'venda'")
 
-    # Padrões: perna comprada ~2-4% OTM, perna vendida ~6-8% OTM
+    premio_alvo_perna1 = premio_alvo_perna1 or PREMI0_ALVO_PERNA1
+    premio_alvo_perna2 = premio_alvo_perna2 or PREMI0_ALVO_PERNA2
+
     if direcao == "compra":
-        pct_perna1 = pct_perna1 or 1.03   # CALL strike +3% (OTM)
-        pct_perna2 = pct_perna2 or 1.08   # CALL strike +8%
-        tipo_perna1 = "call"
-        tipo_perna2 = "call"
+        tipo = "call"
         nome = "TRAVA DE ALTA (Bull Call Spread)"
     else:
-        pct_perna1 = pct_perna1 or 0.97   # PUT strike -3% (OTM)
-        pct_perna2 = pct_perna2 or 0.92   # PUT strike -8%
-        tipo_perna1 = "put"
-        tipo_perna2 = "put"
+        tipo = "put"
         nome = "TRAVA DE BAIXA (Bear Put Spread)"
 
-    strike_perna1, strike_perna2 = _lotes_strikes(preco_atual, pct_perna1, pct_perna2)
+    # Perna comprada: strike que custa ~premio_alvo_perna1 (barato, OTM)
+    strike_comprado = _encontrar_strike_por_premio(
+        preco_atual, dias_venc, tipo, premio_alvo_perna1, sigma)
+    premio_comprado = estimar_premio(preco_atual, strike_comprado, dias_venc, tipo, sigma)
 
-    # Garante que a perna comprada é a mais próxima do preço atual
+    # Perna vendida: ainda mais OTM (prêmio ~premio_alvo_perna2), reduz custo
+    # Base = preco_atual do ativo (não o strike comprado)
+    strike_vendido = _encontrar_strike_por_premio(
+        preco_atual, dias_venc, tipo, premio_alvo_perna2, sigma)
+    premio_vendido = estimar_premio(preco_atual, strike_vendido, dias_venc, tipo, sigma)
+
+    # Garante que a perna vendida está do lado correto (mais OTM que a comprada)
     if direcao == "compra":
-        strike_comprado, strike_vendido = min(strike_perna1, strike_perna2), max(strike_perna1, strike_perna2)
+        if strike_vendido <= strike_comprado:
+            strike_vendido = _proximo_strike(strike_comprado, "cima")
+            premio_vendido = estimar_premio(preco_atual, strike_vendido, dias_venc, tipo, sigma)
     else:
-        strike_comprado, strike_vendido = max(strike_perna1, strike_perna2), min(strike_perna1, strike_perna2)
+        if strike_vendido >= strike_comprado:
+            strike_vendido = _proximo_strike(strike_comprado, "baixo")
+            premio_vendido = estimar_premio(preco_atual, strike_vendido, dias_venc, tipo, sigma)
 
-    premio_comprado = estimar_premio(preco_atual, strike_comprado, dias_venc, tipo_perna1, sigma)
-    premio_vendido = estimar_premio(preco_atual, strike_vendido, dias_venc, tipo_perna2, sigma)
-
+    premio_vendido = max(premio_vendido, 0.0)
     custo_liquido = round(premio_comprado - premio_vendido, 2)
+    if custo_liquido < 0.05:
+        custo_liquido = round(premio_comprado, 2)  # não pode ficar de graça
 
-    # Risco máximo e ganho máximo
+    # Custo total pelo número de contratos
+    custo_total = round(custo_liquido * contratos, 2)
+    premio_comprado_total = round(premio_comprado * contratos, 2)
+
+    # Risco máximo = o que você paga. Ganho máximo = largura do spread - custo.
     if direcao == "compra":
-        risco_max = custo_liquido
-        ganho_max = round((strike_vendido - strike_comprado) - custo_liquido, 2)
+        risco_max = custo_total
+        ganho_max = round((strike_vendido - strike_comprado - custo_liquido) * contratos, 2)
         breakeven = round(strike_comprado + custo_liquido, 2)
-        encerrar_quando = strike_comprado  # perto do strike comprado = sair
+        encerrar_quando = strike_comprado
     else:
-        risco_max = custo_liquido
-        ganho_max = round((strike_comprado - strike_vendido) - custo_liquido, 2)
+        risco_max = custo_total
+        ganho_max = round((strike_comprado - strike_vendido - custo_liquido) * contratos, 2)
         breakeven = round(strike_comprado - custo_liquido, 2)
         encerrar_quando = strike_comprado
+
+    dentro_orcamento = custo_total <= gasto_maximo
 
     return {
         "nome": nome,
         "direcao": direcao,
-        "tipo_perna1": tipo_perna1,
-        "tipo_perna2": tipo_perna2,
+        "tipo": tipo,
         "strike_comprado": strike_comprado,
         "strike_vendido": strike_vendido,
         "premio_comprado": premio_comprado,
         "premio_vendido": premio_vendido,
         "custo_liquido": custo_liquido,
+        "contratos": contratos,
+        "custo_total": custo_total,
+        "premio_comprado_total": premio_comprado_total,
         "risco_maximo": risco_max,
         "ganho_maximo": ganho_max,
         "breakeven": breakeven,
         "encerrar_quando": encerrar_quando,
+        "gasto_maximo": gasto_maximo,
+        "dentro_orcamento": dentro_orcamento,
         "dias_vencimento": dias_venc,
         "fonte": "estimativa",
         "observacao": (
@@ -159,15 +238,21 @@ def montar_trava(preco_atual: float, direcao: str,
 
 def formatar_trava(trava: dict, preco_atual: float) -> str:
     """
-    Formata a trava para exibição no Telegram, com o plano de encerramento.
+    Formata a trava para exibição no Telegram, com o plano de encerramento,
+    focando no custo total em REAIS (não só por contrato).
     """
+    tipo = trava["tipo"].upper()
+    orcamento = "✅ dentro do orçamento" if trava.get("dentro_orcamento") else "⚠️ acima do orçamento de R$ {:.0f}".format(trava.get("gasto_maximo", GASTO_MAXIMO_PADRAO))
+
     linhas = [
         f"  📈 <b>{trava['nome']}</b> (ativo R$ {preco_atual:.2f})",
-        f"  ➕ Comprar {trava['tipo_perna1'].upper()} strike R$ {trava['strike_comprado']:.2f} "
+        f"  ➕ Comprar {tipo} strike R$ {trava['strike_comprado']:.2f} "
         f"— prêmio R$ {trava['premio_comprado']:.2f}",
-        f"  ➖ Vender {trava['tipo_perna2'].upper()} strike R$ {trava['strike_vendido']:.2f} "
+        f"  ➖ Vender {tipo} strike R$ {trava['strike_vendido']:.2f} "
         f"— prêmio R$ {trava['premio_vendido']:.2f}",
-        f"  💰 Custo líquido: R$ {trava['custo_liquido']:.2f}",
+        f"  💰 Custo por contrato: R$ {trava['custo_liquido']:.2f}",
+        f"  💵 Gasto total ({trava['contratos']} contratos): R$ {trava['custo_total']:.2f} "
+        f"— {orcamento}",
         f"  🛑 Risco máx: R$ {trava['risco_maximo']:.2f} | "
         f"🎯 Ganho máx: R$ {trava['ganho_maximo']:.2f}",
         f"  ⚖️ Breakeven: R$ {trava['breakeven']:.2f}",

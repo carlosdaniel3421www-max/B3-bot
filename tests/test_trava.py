@@ -1,35 +1,28 @@
 # -*- coding: utf-8 -*-
 """Testes do módulo de trava (Bull Call Spread / Bear Put Spread)."""
 import pytest
-from trava import montar_trava, formatar_trava, estimar_premio, _lotes_strikes
+from trava import montar_trava, formatar_trava, estimar_premio, _arredondar_strike, _proximo_strike
 
 
 def test_montar_trava_compra():
     trava = montar_trava(45.0, "compra")
     assert trava["nome"] == "TRAVA DE ALTA (Bull Call Spread)"
-    assert trava["tipo_perna1"] == "call"
-    assert trava["tipo_perna2"] == "call"
-    # Perna comprada perto do preço, vendida mais longe
+    assert trava["tipo"] == "call"
     assert trava["strike_comprado"] > 45.0
     assert trava["strike_vendido"] > trava["strike_comprado"]
     assert trava["custo_liquido"] > 0
-    assert trava["risco_maximo"] == trava["custo_liquido"]
-    # Ganho máximo = largura do spread - custo
-    largura = trava["strike_vendido"] - trava["strike_comprado"]
-    assert abs(trava["ganho_maximo"] - (largura - trava["custo_liquido"])) < 0.01
-    assert trava["breakeven"] > trava["strike_comprado"]
+    assert 0 < trava["custo_total"] <= 40  # dentro do orçamento
+    assert trava["dentro_orcamento"] is True
 
 
 def test_montar_trava_venda():
     trava = montar_trava(45.0, "venda")
     assert trava["nome"] == "TRAVA DE BAIXA (Bear Put Spread)"
-    assert trava["tipo_perna1"] == "put"
-    assert trava["tipo_perna2"] == "put"
-    # Perna comprada perto do preço (maior strike), vendida mais longe (menor)
+    assert trava["tipo"] == "put"
     assert trava["strike_comprado"] < 45.0
     assert trava["strike_vendido"] < trava["strike_comprado"]
     assert trava["custo_liquido"] > 0
-    assert trava["risco_maximo"] == trava["custo_liquido"]
+    assert 0 < trava["custo_total"] <= 40
 
 
 def test_trava_direcao_invalida():
@@ -69,13 +62,28 @@ def test_estimar_premio_valores_extremos():
     assert estimar_premio(10, 0, 35, "call", 0.30) == 0.0
 
 
-def test_lotes_strikes_grade_b3():
+def test_arredondar_strike_grade_b3():
     # Abaixo de 10: múltiplo de 0.50
-    s1, s2 = _lotes_strikes(5.0, 1.05, 1.10)
-    assert abs(s1 - 5.0) < 1.0
+    assert _arredondar_strike(5.3) == 5.5
+    assert _arredondar_strike(5.0) == 5.0
     # Acima de 10: múltiplo de 1.00
-    s1, s2 = _lotes_strikes(45.0, 1.03, 1.08)
-    assert s1 % 1.0 == 0 or abs((s1 * 2) % 1.0) < 0.01
+    assert _arredondar_strike(45.3) == 45.0
+    assert _arredondar_strike(45.7) == 46.0
+
+
+def test_proximo_strike_sempre_avanca():
+    # Verifica que nunca fica preso no mesmo strike (bug do round .5)
+    s = 45.0
+    visto = {s}
+    for _ in range(10):
+        s = _proximo_strike(s, "cima")
+        assert s > 45.0
+        assert s not in visto
+        visto.add(s)
+    s = 45.0
+    for _ in range(10):
+        s = _proximo_strike(s, "baixo")
+        assert s < 45.0
 
 
 def test_formatar_trava_conteudo():
