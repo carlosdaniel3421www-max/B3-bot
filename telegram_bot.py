@@ -26,6 +26,7 @@ from datetime import date
 import requests
 
 import config
+from diario_sinais import formatar_resumo_desempenho
 from posicoes import (
     adicionar_posicao, carregar_posicoes, carregar_propostas, formatar_gestao_todas,
     gerar_gestao_posicao, remover_posicao, registrar_da_proposta,
@@ -176,6 +177,9 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
             )
         return "\n".join(linhas)
 
+    if comando in ("/sinais", "/desempenho", "/performance"):
+        return formatar_resumo_desempenho()
+
     if comando in ("/help", "/ajuda", "/start", "/comandos"):
         return (
             "🤖 <b>Comandos do robô:</b>\n"
@@ -185,7 +189,8 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
             "  /remover TICKER — remove a posição (fechou a operação)\n"
             "  /posicoes — mostra todas as posições + o que fazer hoje\n"
             "  /status TICKER — gestão de uma posição com preço atual\n"
-            "  /propostas — propostas de entrada em aberto"
+            "  /propostas — propostas de entrada em aberto\n"
+            "  /sinais — taxa de acerto dos sinais que o robô já emitiu"
         )
 
     return None

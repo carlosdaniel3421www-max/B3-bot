@@ -398,6 +398,25 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
         )
     salvar_estado(estado, arquivo_estado)
 
+    # --- Diário de sinais: registra ENTRAR emitido e atualiza sinais antigos ---
+    try:
+        from diario_sinais import registrar_sinal, atualizar_resultados
+        for r in resultados:
+            if r["score"] >= 8 and r["direcao"] in ("compra", "venda"):
+                registrar_sinal(r["ticker"], r["direcao"], r["score"], r["preco"])
+        # Busca preços atuais dos ativos da watchlist para avaliar sinais antigos
+        precos_diario = {}
+        for t in config.WATCHLIST:
+            try:
+                preco = float(rodar_screener([t], periodo="5d")[0]["preco"])
+                precos_diario[t] = preco
+            except Exception:
+                pass
+        atualizar_resultados(precos_diario)
+    except Exception as e:
+        logging.warning("Falha ao atualizar diário de sinais: %s", e)
+
+
     cabecalho_msg = f"📊 <b>{titulo} — {hoje}</b>\n"
     if nota_extra:
         cabecalho_msg += f"{nota_extra}\n"
