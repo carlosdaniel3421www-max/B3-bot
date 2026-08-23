@@ -31,6 +31,38 @@ def salvar_estado(estado: dict, arquivo: str = CAMINHO_ESTADO_PADRAO):
         json.dump(estado, f, ensure_ascii=False, indent=2)
 
 
+def score_suavizado(estado: dict, ticker: str, score_novo: int, janela: int = 3) -> int:
+    """
+    Calcula o score suavizado como média dos últimos `janela` scores.
+    Guarda histórico no estado para evitar que um único dia extremo
+    (ex: 10/10) vire 4/10 no dia seguinte por oscilação comum.
+    """
+    hoje = date.today().isoformat()
+    if ticker not in estado:
+        estado[ticker] = {}
+    registro = estado[ticker]
+
+    if "score_history" not in registro:
+        registro["score_history"] = []
+    if "ultima_data_score" not in registro:
+        registro["ultima_data_score"] = ""
+
+    # Só adiciona ao histórico se for um dia diferente
+    if registro["ultima_data_score"] != hoje:
+        registro["score_history"].append(score_novo)
+        registro["ultima_data_score"] = hoje
+        # Mantém só os últimos `janela` scores
+        registro["score_history"] = registro["score_history"][-janela:]
+
+    # Média dos últimos scores
+    historico = registro["score_history"]
+    if not historico:
+        return score_novo
+    media = round(sum(historico) / len(historico))
+    # Garante que fica entre 0 e 10
+    return max(0, min(10, media))
+
+
 def eh_alerta_novo(estado: dict, ticker: str, score: int, direcao: str, nivel_detalhe: int) -> bool:
     """
     Decide se esse é um alerta NOVO (deve mostrar plano completo) ou se já

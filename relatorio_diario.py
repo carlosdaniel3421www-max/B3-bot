@@ -22,7 +22,7 @@ from noticias import checar_risco_noticias
 from opcoes import sugerir_parametros_opcao
 from calendario import checar_resultado_proximo
 from gestao_risco import calcular_tamanho_posicao
-from estado import carregar_estado, salvar_estado, eh_alerta_novo, atualizar_estado
+from estado import carregar_estado, salvar_estado, eh_alerta_novo, atualizar_estado, score_suavizado
 from ai_analyzer import AIAnalyzer
 from posicoes import carregar_posicoes, formatar_gestao_todas, salvar_proposta_entrada
 from b3_swing_analyzer import sugerir_stop_alvo, plotar_grafico, determinar_veredito
@@ -346,6 +346,11 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
     estado = carregar_estado(arquivo_estado)
     blocos = []
     for r in resultados:
+        # Suaviza o score com os últimos dias (evita sinal 10/10 virar 4/10
+        # no dia seguinte por oscilação comum do mercado)
+        score_estavel = score_suavizado(estado, r["ticker"], r["score"])
+        r["score"] = score_estavel
+
         caminho = os.path.join(PASTA_GRAFICOS, f"{r['ticker']}_{arquivo_estado.replace('.json','')}.png")
         blocos.append(montar_bloco_resumo(
             r, estado, nivel_detalhe,
