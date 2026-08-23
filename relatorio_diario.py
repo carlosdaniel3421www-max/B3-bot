@@ -230,7 +230,10 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
     if analisador is None:
         return ""
 
-    candidatos = [r for r in resultados if r["score"] >= SCORE_MINIMO_IA and r["direcao"] != "neutro"]
+    candidatos = [
+        r for r in resultados
+        if r.get("score_bruto", r["score"]) >= SCORE_MINIMO_IA and r["direcao"] != "neutro"
+    ]
     if not candidatos:
         return "🤖 <b>Análise da IA:</b> Nenhum ativo com sinal suficiente para análise hoje."
 
@@ -392,6 +395,8 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
     estado = carregar_estado(arquivo_estado)
     blocos = []
     for r in resultados:
+        # Guarda o score bruto do dia (usado pela IA) antes da suavização
+        r["score_bruto"] = r["score"]
         # Suaviza o score com os últimos dias (evita sinal 10/10 virar 4/10
         # no dia seguinte por oscilação comum do mercado)
         score_estavel = score_suavizado(estado, r["ticker"], r["score"])
