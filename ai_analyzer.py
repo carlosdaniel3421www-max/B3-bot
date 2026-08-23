@@ -1002,7 +1002,7 @@ Dados do robô:
                     {"role": "user", "content": prompt_final},
                 ],
                 temperature=0.1,
-                max_tokens=8000,
+                max_tokens=2000,
             )
 
             choice = resposta.choices[0] if resposta.choices else None
@@ -1011,13 +1011,17 @@ Dados do robô:
             texto = texto.strip()
 
             if not texto:
-                reasoning = getattr(mensagem, "reasoning_content", None) if mensagem else None
+                # Nem todos os modelos retornam reasoning_content; alguns
+                # usam "reasoning". Logamos o objeto completo pra diagnóstico.
+                reasoning = getattr(mensagem, "reasoning", None) or getattr(mensagem, "reasoning_content", None) if mensagem else None
                 logger.warning(
-                    "Nemotron retornou content vazio. model_retornado=%r finish_reason=%r "
-                    "reasoning_len=%s reasoning_prim=%r",
+                    "Nemotron content vazio. model=%r finish_reason=%r "
+                    "reasoning_len=%s reasoning_prim=%r "
+                    "resposta_bruta=%s",
                     getattr(resposta, "model", None),
                     getattr(choice, "finish_reason", None),
                     len(reasoning or ""), (reasoning or "")[:300],
+                    str(resposta)[:500].replace('\n', ' '),
                 )
                 self.ultimo_erro = "Nemotron retornou resposta vazia"
                 return None
