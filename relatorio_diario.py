@@ -316,6 +316,40 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
     return cabecalho + "\n\n".join(blocos_ia)
 
 
+def _formatar_veredito_trava(resposta_ia) -> str:
+    """
+    Extrai o veredito da IA sobre a trava e formata em texto claro.
+    resposta_ia pode ser um dict (JSON parseado) — extrai os campos
+    fazer_trava, nivel_certeza, recomendacao, explicacao, cuidados.
+    """
+    if not resposta_ia or not isinstance(resposta_ia, dict):
+        return ""
+
+    fazer = resposta_ia.get("fazer_trava")
+    certeza = resposta_ia.get("nivel_certeza", "")
+    recomendacao = resposta_ia.get("recomendacao", "")
+    explicacao = resposta_ia.get("explicacao", "")
+    cuidados = resposta_ia.get("cuidados", "")
+
+    # Veredito com emoji
+    if fazer is True:
+        veredito = "✅ MONTA A TRAVA"
+    elif fazer is False:
+        veredito = "❌ NÃO MONTA"
+    else:
+        veredito = "⚠️ AVALIAR"
+
+    certeza_txt = f" (certeza {certeza}%)" if certeza else ""
+    linhas = [f"  <b>{veredito}</b>{certeza_txt}"]
+    if recomendacao:
+        linhas.append(f"  📋 {html.escape(str(recomendacao), quote=False)}")
+    if explicacao:
+        linhas.append(f"  💡 {html.escape(str(explicacao), quote=False)}")
+    if cuidados:
+        linhas.append(f"  ⚠️ {html.escape(str(cuidados), quote=False)}")
+    return "\n".join(linhas)
+
+
 def rodar_analise_trava_ia(resultados: list) -> str:
     """
     Monta a TRAVA (Bull/Bear Spread) com preços REAIS do opcoes.net.br para
@@ -355,49 +389,41 @@ def rodar_analise_trava_ia(resultados: list) -> str:
 
         # --- IA exclusiva sobre a trava ---
         opiniao_ia = ""
+        provedor = ""
         if analisador is not None:
             try:
                 prompt_trava = (
-                    f"Analise EXCLUSIVAMENTE esta TRAVA de opções da B3 para {ticker} "
-                    f"(preço atual R$ {preco:.2f}, direção do robô: {direcao}).\n\n"
+                    f"Você é um especialista em opções da B3. Avalie EXCLUSIVAMENTE esta TRAVA "
+                    f"para {ticker} (preço atual R$ {preco:.2f}, direção do robô: {direcao}).\n\n"
                     f"{bloco_trava}\n\n"
-                    "Diga com CERTEZA o que deve fazer: comprar a perna (strike e prêmio), "
-                    "vender a perna, e se o custo total e a relação risco/retorno compensam. "
-                    "Responda APENAS com JSON:\n"
-                    '{"recomendacao": "ex: comprar CALL 10.86 e vender CALL 11.31", '
-                    '"compensa": true/false, "risco_retorno_ok": true/false, '
-                    '"explicacao": "por que", "cuidados": "liquidez, vencimento, etc"}'
+                    "Responda APENAS com JSON, com os campos exatos:\n"
+                    '{"fazer_trava": true/false, '
+                    '"nivel_certeza": "0 a 100", '
+                    '"recomendacao": "ex: comprar CALL 10.86 e vender CALL 11.31", '
+                    '"explicacao": "por que sim ou por que nao", '
+                    '"cuidados": "liquidez, vencimento, risco"}'
                 )
                 opiniao_ia = analisador._call_nemotron(prompt_trava)
                 provedor = "Nemotron"
                 if opiniao_ia:
-                    opiniao_ia = analisador._validate_response(opiniao_ia, direcao, r.get("score_bruto", r["score"]))
-                    if opiniao_ia:
-                        opiniao_ia = analisador.format_telegram_message(opiniao_ia)
-                    else:
-                        opiniao_ia = ""
+                    opiniao_ia = _formatar_veredito_trava(opiniao_ia)
                 else:
                     opiniao_ia = ""
                 if not opiniao_ia:
-                    # fallback Gemini
                     resposta_g = analisador._call_gemini(
                         analisador._get_client(), prompt_trava, None,
                         modelo=analisador.model,
                     )
                     if resposta_g:
-                        resposta_g = analisador._validate_response(
-                            resposta_g, direcao, r.get("score_bruto", r["score"])
-                        )
-                        if resposta_g:
-                            opiniao_ia = analisador.format_telegram_message(resposta_g)
-                            provedor = "Gemini"
+                        opiniao_ia = _formatar_veredito_trava(resposta_g)
+                        provedor = "Gemini"
             except Exception as e:
                 logging.warning("Falha na IA exclusiva da trava de %s: %s", ticker, e)
                 opiniao_ia = ""
 
         if opiniao_ia:
             bloco_trava += (
-                f"\n\n  🧠 <b>Leitura da IA ({provedor}):</b>\n"
+                f"\n\n  🧠 <b>Veredito da IA ({provedor}):</b>\n"
                 f"{opiniao_ia}"
             )
 
