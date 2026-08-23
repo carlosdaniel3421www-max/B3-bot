@@ -118,17 +118,25 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
         if len(args) >= 5:
             try:
                 direcao = args[1].lower()
+                if direcao not in ("compra", "venda"):
+                    return "⚠️ Direção inválida. Use: /registrar TICKER compra PRECO STOP ALVO [QTD]\nou: /registrar TICKER venda PRECO STOP ALVO [QTD]"
                 preco = float(args[2])
                 stop = float(args[3])
                 alvo = float(args[4])
+                if preco <= 0 or stop <= 0 or alvo <= 0:
+                    return "⚠️ Preços precisam ser números positivos."
+                if direcao == "compra" and not (stop < preco < alvo):
+                    return "⚠️ Na compra, stop < entrada < alvo. Ex: /registrar PETR4 compra 43.11 40.50 48.22"
+                if direcao == "venda" and not (alvo < preco < stop):
+                    return "⚠️ Na venda, alvo < entrada < stop. Ex: /registrar PETR4 venda 43.11 44.50 40.00"
                 quantidade = int(args[5]) if len(args) > 5 else 0
                 posicao = adicionar_posicao(ticker, direcao, preco, stop, alvo, quantidade=quantidade)
                 return f"✅ <b>{ticker}</b> registrada manualmente ({posicao['direcao']}). Entrada R$ {posicao['preco_entrada']} · Stop R$ {posicao['stop']} · Alvo R$ {posicao['alvo']}. Agora acompanho todo dia."
             except ValueError as e:
-                return f"⚠️ Registro não feito: {e}"
+                return f"⚠️ Valor inválido: {e}. Use números com ponto (.) como separador decimal. Ex: 43.11"
             except Exception as e:
                 logging.warning("Erro ao registrar %s manualmente: %s", ticker, e)
-                return f"⚠️ Erro ao registrar: {e}"
+                return f"⚠️ Erro ao registrar: {str(e)[:200]}"
 
         # Registro pela proposta do robô: /registrar TICKER [QTD]
         quantidade = int(args[1]) if len(args) > 1 else 0
