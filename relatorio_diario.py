@@ -26,6 +26,7 @@ from estado import carregar_estado, salvar_estado, atualizar_estado, score_suavi
 from ai_analyzer import AIAnalyzer
 from posicoes import carregar_posicoes, formatar_gestao_todas, salvar_proposta_entrada
 from b3_swing_analyzer import sugerir_stop_alvo, plotar_grafico, determinar_veredito
+from trava import montar_trava, formatar_trava
 from telegram_utils import enviar_mensagem, enviar_album
 
 # Garante que os logs de erro do ai_analyzer.py (status HTTP, mensagem,
@@ -181,6 +182,15 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
         f"  ⚠️ Confirme liquidez antes de operar.\n"
         f"  ✅ Se ENTRAR, registre: responda <b>/registrar {ticker}</b> no chat."
     )
+
+    # --- TRAVA: para sinais FORTES (score >= 9) mostra a estrutura de duas
+    # pernas (risco limitado). É a estratégia preferida em pontuação alta. ---
+    if score >= 9 and direcao in ("compra", "venda"):
+        try:
+            trava = montar_trava(resultado["preco"], direcao)
+            plano += "\n" + formatar_trava(trava, resultado["preco"])
+        except Exception as e:
+            logging.warning("Falha ao montar trava de %s: %s", ticker, e)
 
     if risco_noticias.get("positivas"):
         plano += f"\n  ✅ {risco_noticias['positivas'][0]['titulo']}"
