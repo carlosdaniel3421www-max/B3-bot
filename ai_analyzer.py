@@ -1002,12 +1002,25 @@ Dados do robô:
                     {"role": "user", "content": prompt_final},
                 ],
                 temperature=0.1,
-                max_tokens=3500,
+                max_tokens=5000,
             )
 
-            texto = resposta.choices[0].message.content if resposta.choices else None
+            mensagem = resposta.choices[0].message if resposta.choices else None
+            texto = (mensagem.content if mensagem else None) or ""
+            texto = texto.strip()
+
+            # Modelos de raciocínio (Nemotron/DeepSeek) às vezes gastam todos
+            # os tokens "pensando" e entregam o content vazio. Se isso ocorrer,
+            # o raciocínio fica em `reasoning_content` — usamos apenas como
+            # diagnóstico e logamos, mas não dá pra parsear como JSON de análise.
             if not texto:
-                self.ultimo_erro = "Nemotron retornou resposta vazia"
+                reasoning = getattr(mensagem, "reasoning_content", None) if mensagem else None
+                logger.warning(
+                    "Nemotron retornou content vazio (tokens esgotados no raciocínio?); "
+                    "reasoning_content len=%s, prim=%r",
+                    len(reasoning or ""), (reasoning or "")[:300],
+                )
+                self.ultimo_erro = "Nemotron retornou resposta vazia (tokens esgotados no raciocínio)"
                 return None
 
             logger.info(
