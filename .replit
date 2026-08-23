@@ -1,7 +1,1 @@
-# B3-bot servidor — Replit config
-# Roda o servidor API 24/7
-entrypoint = "servidor_api.py"
-run = "gunicorn servidor_api:app --bind 0.0.0.0:8080 --timeout 120 --workers 2"
-
-# Intervalo de saúde (Replit verifica se o servidor tá vivo)
-healthcheck = "/health"
+run = "python servidor_api.py"
