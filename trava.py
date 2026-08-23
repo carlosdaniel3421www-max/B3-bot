@@ -177,11 +177,18 @@ def montar_trava(preco_atual: float, direcao: str,
             vencimento_data = venc["dt"]
             lado = venc.get("calls" if tipo == "call" else "puts", {})
             if lado:
-                # Acha strike com prêmio mais próximo do alvo
+                # Acha strike com prêmio mais próximo do alvo, exigindo
+                # LIQUIDEZ: preço disponível E pelo menos 1 negócio (evita
+                # pegar opção sem negócio recente com preço desatualizado).
+                def _tem_liquidez(info):
+                    return (info["preco"] is not None
+                            and info.get("negocios") is not None
+                            and info["negocios"] > 0)
+
                 melhor_strike = None
                 melhor_dist = float("inf")
                 for strike, info in lado.items():
-                    if info["preco"] is None:
+                    if not _tem_liquidez(info):
                         continue
                     dist = abs(info["preco"] - premio_alvo_perna1)
                     if dist < melhor_dist:
@@ -197,7 +204,7 @@ def montar_trava(preco_atual: float, direcao: str,
                     strike_vendido = None
                     melhor_dist2 = float("inf")
                     for strike, info in sorted(lado.items()):
-                        if info["preco"] is None:
+                        if not _tem_liquidez(info):
                             continue
                         if direcao == "compra" and strike <= strike_comprado:
                             continue
@@ -211,11 +218,16 @@ def montar_trava(preco_atual: float, direcao: str,
                         premio_vendido = round(lado[strike_vendido]["preco"], 2)
                         sufixo_vendido = lado[strike_vendido].get("sufixo") or ""
                     else:
-                        # Fallback: strike mais distante disponível
-                        strikes_ordenados = sorted(lado.keys())
-                        strike_vendido = strikes_ordenados[-1] if direcao == "compra" else strikes_ordenados[0]
-                        premio_vendido = round(lado[strike_vendido]["preco"], 2) if strike_vendido in lado and lado[strike_vendido]["preco"] else 0.0
-                        sufixo_vendido = lado[strike_vendido].get("sufixo") or ""
+                        # Fallback: strike mais distante com liquidez
+                        strikes_ordenados = sorted(
+                            [s for s, i in lado.items() if _tem_liquidez(i)]
+                        )
+                        if strikes_ordenados:
+                            strike_vendido = strikes_ordenados[-1] if direcao == "compra" else strikes_ordenados[0]
+                            premio_vendido = round(lado[strike_vendido]["preco"], 2)
+                            sufixo_vendido = lado[strike_vendido].get("sufixo") or ""
+                        else:
+                            strike_vendido = None
                 else:
                     strike_comprado = None
                     premio_comprado = None
