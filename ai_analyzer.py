@@ -998,18 +998,19 @@ Dados do robô:
                     {
                         "role": "system",
                         "content": (
-                            "Você é um analista técnico de ações experiente. "
-                            "Responda APENAS com JSON válido, sem texto antes ou depois."
+                            "Você é um analista técnico de ações. "
+                            "Responda APENAS com o JSON puro, sem texto, sem raciocínio, sem explicação."
                         ),
                     },
                     {"role": "user", "content": prompt_final},
                 ],
-                temperature=0.15,
-                max_tokens=1200,
+                temperature=0.1,
+                max_tokens=3500,
             )
 
             texto = resposta.choices[0].message.content if resposta.choices else None
             if not texto:
+                self.ultimo_erro = "Nemotron retornou resposta vazia"
                 return None
 
             logger.info(
@@ -1018,7 +1019,8 @@ Dados do robô:
                 self.CARLOS_base_url,
             )
             print(f"  [IA] Análise feita pelo Nemotron ({self.CARLOS_model})")
-            print(f"[DEBUG] Raw Nemotron response: {texto[:300]}")
+            print(f"[DEBUG] Raw Nemotron len={len(texto)}: {texto[:600]}")
+            print(f"[DEBUG] Nemotron fim: {texto[-200:]}")
 
             resultado = self._extract_json(texto)
             if resultado is None:
@@ -1096,19 +1098,34 @@ Dados do robô:
                 except json.JSONDecodeError:
                     continue
 
-        # Estratégia 4: Procura JSON no final da resposta (onde o Nemotron costuma colocar)
-        # Procura pelo último { que abre um JSON válido
-        last_brace_idx = -1
-        for i, char in enumerate(texto):
-            if char == '{':
-                last_brace_idx = i
-        
-        if last_brace_idx >= 0:
-            # Tenta parsear a partir do último {
-            try:
-                return json.loads(texto[last_brace_idx:])
-            except json.JSONDecodeError:
-                pass
+        # Estratégia 4: Procura JSON no final da resposta usando balanceamento de chaves
+        for start_idx in range(len(texto) - 1, -1, -1):
+            if texto[start_idx] != '{':
+                continue
+            profundidade = 0
+            in_string = False
+            escape = False
+            for j in range(start_idx, len(texto)):
+                ch = texto[j]
+                if in_string:
+                    if escape:
+                        escape = False
+                    elif ch == '\\':
+                        escape = True
+                    elif ch == '"':
+                        in_string = False
+                    continue
+                if ch == '"':
+                    in_string = True
+                elif ch == '{':
+                    profundidade += 1
+                elif ch == '}':
+                    profundidade -= 1
+                    if profundidade == 0:
+                        try:
+                            return json.loads(texto[start_idx:j+1])
+                        except json.JSONDecodeError:
+                            break
 
         # Fallback 1: JSON simples não guloso ({...} sem { } aninhados)
         matches = re.findall(r'\{[^{}]*\}', texto)
