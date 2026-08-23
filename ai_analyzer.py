@@ -20,6 +20,7 @@ import json
 import logging
 import re
 import time
+import html
 
 from pathlib import Path
 from typing import Any, Optional, Sequence, Mapping
@@ -1473,6 +1474,10 @@ Dados do robô:
 
         return resultado
 
+    def _esc(self, texto) -> str:
+        """Escapa HTML do conteúdo vindo da IA (evita quebra no Telegram)."""
+        return html.escape(str(texto), quote=False)
+
     def format_telegram_message(
         self,
         result: dict[str, Any]
@@ -1506,41 +1511,41 @@ Dados do robô:
             linhas.append("⚠️ Na minha leitura, não vale operar agora.")
 
         # --- plano de entrada ---
-        setup = result.get("setup", "")
-        entrada = result.get("preco_ideal_entrada", "")
+        setup = self._esc(result.get("setup", ""))
+        entrada = self._esc(result.get("preco_ideal_entrada", ""))
         if entrada:
             sufixo_setup = f" ({setup})" if setup else ""
             linhas.append(f"💰 Entrada ideal: R$ {entrada}{sufixo_setup}")
 
-        strike = result.get("strike_sugerido", "")
+        strike = self._esc(result.get("strike_sugerido", ""))
         if strike:
-            tempo = result.get("tempo_estimado", "")
+            tempo = self._esc(result.get("tempo_estimado", ""))
             sufixo_tempo = f" ({tempo})" if tempo else ""
             linhas.append(f"📈 Strike sugerido: {operacao} {strike}{sufixo_tempo}")
 
-        stop = result.get("stop", "")
+        stop = self._esc(result.get("stop", ""))
         if stop:
             linhas.append(f"🛑 Stop: R$ {stop}")
 
-        alvo = result.get("alvo", "")
+        alvo = self._esc(result.get("alvo", ""))
         if alvo:
             linhas.append(f"🎯 Alvo: R$ {alvo}")
 
-        risco = result.get("risco", "")
+        risco = self._esc(result.get("risco", ""))
         confianca = result.get("confianca", 0)
         if risco:
             linhas.append(f"⚠️ Risco: {risco} (confiança da IA: {confianca}%)")
 
         # --- motivo (o "porquê" — o mais importante pra decisão) ---
-        explicacao = result.get("explicacao", "")
+        explicacao = self._esc(result.get("explicacao", ""))
         if explicacao:
             linhas.append(f"🧠 {explicacao}")
 
         for item in result.get("pontos_fortes", []):
-            linhas.append(f"  + {item}")
+            linhas.append(f"  + {self._esc(item)}")
 
         for item in result.get("pontos_fracos", []):
-            linhas.append(f"  – {item}")
+            linhas.append(f"  – {self._esc(item)}")
 
         return "\n".join(
             l if l.startswith("  ") else f"• {l}"

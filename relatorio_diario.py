@@ -281,8 +281,10 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
 
         if resultado_ia is None:
             motivo = getattr(analisador, "ultimo_erro", None) or "motivo desconhecido"
+            import html as _html
+            motivo_esc = _html.escape(str(motivo), quote=False)
             blocos_ia.append(
-                f"⚠️ <b>{ticker}</b> — IA indisponível ({motivo}).\n"
+                f"⚠️ <b>{ticker}</b> — IA indisponível ({motivo_esc}).\n"
                 f"O placar técnico acima já é válido e não depende da IA."
             )
         else:
