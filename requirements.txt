@@ -8,6 +8,4 @@ mplfinance
 google-genai
 openai
 schedule
-flask
-gunicorn
 pytest
