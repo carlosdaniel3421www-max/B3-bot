@@ -19,7 +19,7 @@ from datetime import date
 import config
 from screener import rodar_screener
 from noticias import checar_risco_noticias
-from opcoes import sugerir_parametros_opcao
+from opcoes import sugerir_parametros_opcao_com_preco
 from calendario import checar_resultado_proximo
 from gestao_risco import calcular_tamanho_posicao
 from estado import carregar_estado, salvar_estado, atualizar_estado, score_suavizado
@@ -135,7 +135,10 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
     except Exception as e:
         logging.warning("Falha ao salvar proposta de %s: %s", ticker, e)
 
-    opcao = sugerir_parametros_opcao(resultado["preco"], direcao)
+    opcao = sugerir_parametros_opcao_com_preco(
+        resultado["preco"], direcao, ticker,
+        token=getattr(config, "OPLAB_TOKEN", ""),
+    )
     posicao = calcular_tamanho_posicao(
         config.CAPITAL_DISPONIVEL, config.RISCO_POR_OPERACAO_PCT,
         stop_alvo["preco_entrada"], stop_alvo["stop"]
@@ -162,9 +165,19 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
             f"({posicao['pct_capital_em_risco']}% do capital)\n"
         )
 
+    if opcao.get("premio"):
+        linha_premio = f"R$ {opcao['premio']:.2f} (preço real)"
+        if opcao.get("fonte") == "oplab":
+            linha_premio += " — OpLab"
+        else:
+            linha_premio += " — estimativa teórica"
+    else:
+        linha_premio = "estimativa teórica (sem cotação real)"
+
     plano += (
         f"  <b>Opção:</b> {opcao['tipo_opcao']} strike ~R$ {opcao['strike_sugerido_aprox']}, "
         f"venc. {opcao['vencimento_sugerido']} — {explicacao_opcao}\n"
+        f"  <i>Prêmio: {linha_premio}</i>\n"
         f"  ⚠️ Confirme liquidez antes de operar.\n"
         f"  ✅ Se ENTRAR, registre: responda <b>/registrar {ticker}</b> no chat."
     )

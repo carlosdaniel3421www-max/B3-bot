@@ -13,9 +13,45 @@ IMPORTANTE: a B3 não tem uma fonte gratuita e confiável de cadeia de opções
 2. `buscar_cadeia_oplab()` — integração pronta com a API da OpLab
    (oplab.com.br), que tem dados reais de opções da B3. Requer uma chave
    de API paga. Preencha OPLAB_TOKEN em config.py para usar.
+
+3. `sugerir_parametros_opcao_com_preco()` — versão "inteligente": se a
+   OpLab estiver configurada, tenta buscar o prêmio real; senão (ou se a
+   busca falhar), cai pro valor teórico e sinaliza que é estimativa.
 """
 
+import logging
+
 import requests
+
+logger = logging.getLogger(__name__)
+
+
+def _buscar_premio_oplab_para_strike(ticker, token, tipo_opcao, strike_alvo,
+                                     dias_min=25, dias_max=45):
+    """Busca o prêmio real da opção mais próxima do strike alvo na OpLab."""
+    try:
+        cadeia = buscar_cadeia_oplab(ticker, token)
+        if not isinstance(cadeia, list) or not cadeia:
+            return None
+        candidatas = [
+            o for o in cadeia
+            if str(o.get("type", "")).upper() == tipo_opcao
+            and dias_min <= o.get("days_to_maturity", 0) <= dias_max
+        ]
+        if not candidatas:
+            return None
+        candidatas.sort(key=lambda o: abs(o.get("strike", 0) - strike_alvo))
+        melhor = candidatas[0]
+        premio = melhor.get("bid") or melhor.get("ask") or melhor.get("premium")
+        if premio:
+            return {
+                "premio_real": float(premio),
+                "strike_real": melhor.get("strike"),
+                "liquidez_ok": (melhor.get("volume") or 0) > 0,
+            }
+    except Exception as e:
+        logger.warning("Falha ao buscar prêmio real na OpLab (%s): %s", ticker, e)
+    return None
 
 
 def sugerir_parametros_opcao(preco_atual: float, direcao: str, prazo_dias_min=25, prazo_dias_max=45) -> dict:
@@ -86,3 +122,40 @@ def escolher_melhor_opcao(cadeia: list, strike_alvo: float, tipo_opcao: str, dia
 
     candidatas.sort(key=lambda o: abs(o.get("strike", 0) - strike_alvo))
     return candidatas[0]
+
+
+def sugerir_parametros_opcao_com_preco(preco_atual: float, direcao: str, ticker: str,
+                                        token: str = "", prazo_dias_min=25, prazo_dias_max=45) -> dict:
+    """
+    Versão "inteligente" de sugestão de opção:
+    - Se `token` (OpLab) for informado, tenta buscar o prêmio real da opção
+      mais próxima do strike sugerido. Se encontrar, usa o prêmio real.
+    - Caso contrário (sem token, ou busca falhou), usa o valor teórico e
+      sinaliza claramente que é ESTIMATIVA.
+    Retorna sempre o mesmo schema de `sugerir_parametros_opcao`, adicionando
+    `premio` (float) e `fonte` ("oplab" | "estimativa").
+    """
+    base = sugerir_parametros_opcao(preco_atual, direcao,
+                                    prazo_dias_min=prazo_dias_min,
+                                    prazo_dias_max=prazo_dias_max)
+    base["premio"] = None
+    base["fonte"] = "estimativa"
+
+    tipo_opcao = base["tipo_opcao"]
+    strike_alvo = base["strike_sugerido_aprox"]
+
+    if token:
+        real = _buscar_premio_oplab_para_strike(
+            ticker, token, tipo_opcao, strike_alvo,
+            dias_min=prazo_dias_min, dias_max=prazo_dias_max,
+        )
+        if real and real.get("premio_real"):
+            base["premio"] = real["premio_real"]
+            base["fonte"] = "oplab"
+            base["strike_sugerido_aprox"] = real.get("strike_real", strike_alvo)
+            base["observacao"] = (
+                "Prêmio real da OpLab (cotação de mercado). Verifique a liquidez "
+                "(volume/contratos em aberto) antes de operar."
+            )
+
+    return base
