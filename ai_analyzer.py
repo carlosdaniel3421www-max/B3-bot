@@ -621,9 +621,14 @@ responda SEMPRE coerente com ela:
    Não há setup suficiente. Diga o que está faltando.
 
 4) NUNCA contradiga o robô. A IA é uma SEGUNDA OPINIÃO que explica e
-   detalha a decisão do robô — nunca é ela quem decide entrar ou não.
-   Seu papel: explicar POR QUE o placar do robô faz sentido (ou avisar
-   dos riscos), não criar um veredito paralelo.
+    detalha a decisão do robô — nunca é ela quem decide entrar ou não.
+    Seu papel: explicar POR QUE o placar do robô faz sentido (ou avisar
+    dos riscos), não criar um veredito paralelo.
+
+    Se você DISCORDA da interpretação do robô (ex: "robô está comprado, mas
+    RSI diário mostra divergência de baixa"), preencha o campo "divergencia"
+    com uma explicação objetiva. Isso não muda "vale_operar" nem a decisão
+    final — apenas alerta o usuário sobre algo que o robô pode não ter visto.
 
 5) EXAUSTÃO DE TENDÊNCIA: Se o preço subiu consecutivamente por 3-5 dias
    sem pullback de no mínimo 2-3%, a tendência pode estar madura para
@@ -731,6 +736,8 @@ Formato obrigatório:
     "risco": "",
 
     "explicacao": "",
+
+    "divergencia": "",
 
     "pontos_fortes": [],
 
@@ -1477,6 +1484,14 @@ Dados do robô:
 
 
 
+            "divergencia":
+
+                texto(
+                    "divergencia"
+                ),
+
+
+
             "pontos_fortes":
 
                 lista(
@@ -1494,13 +1509,13 @@ Dados do robô:
         }
 
         # ------------------------------------------------------------------
-        # REGRA RÍGIDA DE CONSISTÊNCIA COM O ROBÔ (imposta no código):
-        # A IA SÓ aprova entrada quando o robô deu ENTRAR (score >= 8).
-        # Senão, força a resposta da IA a NÃO operar, ignorando o que o
-        # Gemini escreveu (ele pode errar ou "viajar").
+        # REGRA DE CONSISTÊNCIA COM O ROBÔ (imposta no código):
+        # A decisão de operar (vale_operar/entrada_agora) pertence AO ROBÔ
+        # (score >= 8 = ENTRAR). A IA não decide isso. Porém, a IA PODE
+        # discordar da interpretação do robô via o campo "divergencia",
+        # preservando a transparência sem deixar a IA controlar a decisão.
         # ------------------------------------------------------------------
         if score_robo >= 8:
-            resultado["concorda_com_robo"] = True
             resultado["vale_operar"] = True
             resultado["entrada_agora"] = True
             resultado["esperar_confirmacao"] = False
@@ -1509,6 +1524,8 @@ Dados do robô:
                 resultado["operacao"] = "COMPRA"
             elif original_direction == "venda":
                 resultado["operacao"] = "VENDA"
+            # Preserva o concorda_com_robo que a IA respondeu — se ela viu
+            # divergência, concorda=False fica visível e alerta o usuário.
         else:
             resultado["vale_operar"] = False
             resultado["entrada_agora"] = False
@@ -1590,6 +1607,11 @@ Dados do robô:
         explicacao = self._esc(result.get("explicacao", ""))
         if explicacao:
             linhas.append(f"🧠 {explicacao}")
+
+        # --- divergência da IA (só aparece quando ela discorda do robô) ---
+        divergencia = result.get("divergencia", "")
+        if divergencia:
+            linhas.append(f"⚠️ <b>Divergência da IA:</b> {self._esc(divergencia)}")
 
         for item in result.get("pontos_fortes", []):
             linhas.append(f"  + {self._esc(item)}")

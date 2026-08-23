@@ -5,6 +5,7 @@ retorna todos ranqueados do sinal mais forte para o mais fraco.
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from b3_swing_analyzer import (
     baixar_dados, calcular_indicadores, avaliar_ativo,
     calcular_indicadores_curto_prazo, avaliar_ativo_curto_prazo,
@@ -20,9 +21,54 @@ WATCHLIST_PADRAO = [
 ]
 
 
+def _processar_ativo(ticker, periodo, usar_curto_prazo, projetar_volume,
+                     confirmar_intradiario) -> dict | None:
+    """Processa um ativo individualmente (para paralelismo)."""
+    try:
+        df = baixar_dados(ticker, periodo=periodo)
+        df = calcular_indicadores(df)  # sempre calcula o padrão (usado no gráfico)
+
+        if projetar_volume:
+            df = projetar_volume_dia_atual(df)
+
+        if usar_curto_prazo:
+            df = calcular_indicadores_curto_prazo(df)
+            avaliacao = avaliar_ativo_curto_prazo(df)
+        else:
+            avaliacao = avaliar_ativo(df)
+
+        motivos = list(avaliacao["motivos"])
+        score = avaliacao["score"]
+        direcao = avaliacao["direcao"]
+
+        if confirmar_intradiario and direcao != "neutro":
+            horario = avaliar_timeframe_horario(ticker)
+            if horario["direcao"] == direcao:
+                score = min(10, score + 1)
+                motivos.append(f"✅ Gráfico de 1h confirma a mesma direção (RSI horário {horario['rsi_h']:.0f})")
+            elif horario["direcao"] not in ("neutro", "indisponivel"):
+                score = max(0, score - 2)
+                motivos.append(
+                    f"⚠️ Gráfico de 1h está na direção OPOSTA (RSI horário {horario['rsi_h']:.0f}) "
+                    f"— cautela redobrada, sinal pode estar perdendo força intradiária"
+                )
+
+        return {
+            "ticker": ticker,
+            "score": score,
+            "direcao": direcao,
+            "preco": avaliacao["preco_atual"],
+            "motivos": motivos,
+            "df": df,  # mantém o dataframe para uso posterior (gráfico, stop/alvo)
+        }
+    except Exception as e:
+        logging.warning("Falha ao processar %s: %s", ticker, e)
+        return None
+
+
 def rodar_screener(watchlist=None, periodo="2y", pausa=0.3,
                     usar_curto_prazo: bool = False, projetar_volume: bool = False,
-                    confirmar_intradiario: bool = False) -> list:
+                    confirmar_intradiario: bool = False, paralelo: bool = True) -> list:
     """
     Roda a avaliação (placar 0-10) para cada ativo da watchlist.
     `pausa` evita sobrecarregar a fonte de dados com requisições muito rápidas.
@@ -35,52 +81,35 @@ def rodar_screener(watchlist=None, periodo="2y", pausa=0.3,
     confirmar_intradiario: busca o gráfico de 1 HORA e usa ele pra confirmar
         (+1 ponto, até o máximo de 10) ou contestar (-2 pontos) o sinal do
         gráfico diário. Só faz sentido junto com usar_curto_prazo=True.
+    paralelo: usa ThreadPoolExecutor para baixar os ativos em paralelo
+        (bem mais rápido; `pausa` vira o intervalo entre submissões).
     Retorna lista de dicts ordenada do nível mais alto para o mais baixo.
     """
     watchlist = watchlist or WATCHLIST_PADRAO
     resultados = []
 
-    for ticker in watchlist:
-        try:
-            df = baixar_dados(ticker, periodo=periodo)
-            df = calcular_indicadores(df)  # sempre calcula o padrão (usado no gráfico)
-
-            if projetar_volume:
-                df = projetar_volume_dia_atual(df)
-
-            if usar_curto_prazo:
-                df = calcular_indicadores_curto_prazo(df)
-                avaliacao = avaliar_ativo_curto_prazo(df)
-            else:
-                avaliacao = avaliar_ativo(df)
-
-            motivos = list(avaliacao["motivos"])
-            score = avaliacao["score"]
-            direcao = avaliacao["direcao"]
-
-            if confirmar_intradiario and direcao != "neutro":
-                horario = avaliar_timeframe_horario(ticker)
-                if horario["direcao"] == direcao:
-                    score = min(10, score + 1)
-                    motivos.append(f"✅ Gráfico de 1h confirma a mesma direção (RSI horário {horario['rsi_h']:.0f})")
-                elif horario["direcao"] not in ("neutro", "indisponivel"):
-                    score = max(0, score - 2)
-                    motivos.append(
-                        f"⚠️ Gráfico de 1h está na direção OPOSTA (RSI horário {horario['rsi_h']:.0f}) "
-                        f"— cautela redobrada, sinal pode estar perdendo força intradiária"
-                    )
-
-            resultados.append({
-                "ticker": ticker,
-                "score": score,
-                "direcao": direcao,
-                "preco": avaliacao["preco_atual"],
-                "motivos": motivos,
-                "df": df,  # mantém o dataframe para uso posterior (gráfico, stop/alvo)
-            })
-        except Exception as e:
-            logging.warning("Falha ao processar %s: %s", ticker, e)
-        time.sleep(pausa)
+    if paralelo and len(watchlist) > 2:
+        with ThreadPoolExecutor(max_workers=min(6, len(watchlist))) as executor:
+            futuros = {
+                executor.submit(
+                    _processar_ativo, t, periodo, usar_curto_prazo,
+                    projetar_volume, confirmar_intradiario,
+                ): t
+                for t in watchlist
+            }
+            for futuro in as_completed(futuros):
+                r = futuro.result()
+                if r:
+                    resultados.append(r)
+    else:
+        for ticker in watchlist:
+            r = _processar_ativo(
+                ticker, periodo, usar_curto_prazo, projetar_volume,
+                confirmar_intradiario,
+            )
+            if r:
+                resultados.append(r)
+            time.sleep(pausa)
 
     resultados.sort(key=lambda r: r["score"], reverse=True)
     return resultados

@@ -27,13 +27,19 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://opcoes.net.br/api/v1"
 TIMEOUT = 20
 
+# Cache simples em memória: {ticker: (timestamp_ultimo_pregao, cadeia)}
+# Dado de "último pregão" não muda dentro do dia — evita re-buscar a cadeia
+# inteira a cada chamada no mesmo dia.
+_cache_cadeia = {}
 
-def buscar_cadeia_opcoesnet(ticker: str) -> dict | None:
-    """
-    Busca a cadeia de opções do ticker na API do opcoes.net.br.
-    Retorna dict com underlying, strikes, expirations, calls/puts.
-    None se falhar ou não houver dados.
-    """
+
+def _chave_dia(ticker: str) -> str:
+    import datetime
+    return f"{ticker.upper()}_{datetime.date.today().isoformat()}"
+
+
+def _buscar_cadeia_opcoesnet_sem_cache(ticker: str) -> dict | None:
+    """Chama a API real do opcoes.net.br (sem cache)."""
     ticker = ticker.upper()
     try:
         z = int(time.time() / 10000)
@@ -69,6 +75,13 @@ def buscar_cadeia_opcoesnet(ticker: str) -> dict | None:
                 # Preço do ativo-base (chave 'p' dentro de underlying_asset)
                 ua = results.get("underlying_asset") or {}
                 preco_base = ua.get("p")
+                # Colunas (para parse robusto)
+                columns = results.get("columns") or []
+                # Data do último pregão
+                data_ultimo_pregao = None
+                for r0 in data.get("requests", []):
+                    if r0.get("type") == "LastQuotesInfo":
+                        data_ultimo_pregao = (r0.get("results") or {}).get("dateLastQuotesInDB")
                 # Vencimentos
                 expirations_raw = results.get("expirations") or []
                 expirations = []
@@ -85,6 +98,8 @@ def buscar_cadeia_opcoesnet(ticker: str) -> dict | None:
                     "preco_base": preco_base,
                     "strikes": (results.get("strikes") or {}).get("list") or [],
                     "expirations": expirations,
+                    "columns": columns,
+                    "data_ultimo_pregao": data_ultimo_pregao,
                 }
         logger.warning("opcoes.net.br %s -> sem OptionsChain no payload", ticker)
         return None
@@ -94,6 +109,25 @@ def buscar_cadeia_opcoesnet(ticker: str) -> dict | None:
     except Exception as e:
         logger.warning("opcoes.net.br %s -> erro inesperado: %s", ticker, e)
         return None
+
+
+def buscar_cadeia_opcoesnet(ticker: str, usar_cache: bool = True) -> dict | None:
+    """
+    Busca a cadeia de opções do ticker na API do opcoes.net.br.
+    Com cache por dia (dado de último pregão não muda no mesmo dia).
+    """
+    chave = _chave_dia(ticker)
+    if usar_cache and chave in _cache_cadeia:
+        return _cache_cadeia[chave]
+    cadeia = _buscar_cadeia_opcoesnet_sem_cache(ticker)
+    if cadeia:
+        _cache_cadeia[chave] = cadeia
+    return cadeia
+
+
+def limpar_cache_cadeia():
+    """Limpa o cache de cadeias (útil em testes)."""
+    _cache_cadeia.clear()
 
 
 def _serie_para_opcao(serie: list, columns: list) -> dict:
@@ -108,29 +142,31 @@ def _serie_para_opcao(serie: list, columns: list) -> dict:
     return resultado
 
 
-def buscar_cadeia_estruturada(ticker: str) -> dict | None:
+def buscar_cadeia_estruturada(ticker: str, usar_cache: bool = True) -> dict | None:
     """
     Busca a cadeia e devolve já estruturada para consumo fácil:
     {
         'preco_base': float,
-        'expirations': [ { 'dt': ..., 'du': ..., 'calls': {strike: {'p':..., 'b':..., 'a':..., 'n':...}}, 'puts': {...} } ]
+        'expirations': [ { 'dt': ..., 'du': ..., 'calls': {strike: {...}}, 'puts': {...} } ]
     }
     """
-    raw = buscar_cadeia_opcoesnet(ticker)
+    raw = buscar_cadeia_opcoesnet(ticker, usar_cache=usar_cache)
     if not raw:
         return None
 
-    # Precisamos das colunas para mapear os arrays. A chamada com
-    # columns_info=true não expõe as colunas no mesmo nível; usamos a
-    # ordem conhecida do site (ver fonte_opcoes.ler_ordem_colunas).
-    # Ordem posicional documentada:
+    # Ordem posicional documentada da API (posição das colunas):
     # 0 suffix | 1 fm | 2 modelo | 3 strike | 4 aio | 5 dist |
     # 6 preço_último | 7 variação | 8 data_hora | 9 n_negócios |
-    # 10 volume | 11 vol_impl | 12 delta | ...
+    # 10 volume financeiro | 11 IQ | 12 coberto | 13 travado | 14 descoberto |
+    # 15 titulares | 16 lançadores | 17 vol_impl | 18 delta | 19 gamma | ...
     col_strike = 3
     col_preco = 6
     col_negocios = 9
     col_volume = 10
+    col_vol_impl = 17
+    col_delta = 18
+    col_bid = 7   # variação — usado como proxy? Não; bid/ask não vêm no último pregão
+    col_ask = 8
 
     def _mapa(series: list) -> dict:
         m = {}
@@ -146,6 +182,8 @@ def buscar_cadeia_estruturada(ticker: str) -> dict | None:
                 "preco": _to_float(s[col_preco]),
                 "negocios": _to_float(s[col_negocios]),
                 "volume": _to_float(s[col_volume]),
+                "vol_impl": _to_float(s[col_vol_impl]) if len(s) > col_vol_impl else None,
+                "delta": _to_float(s[col_delta]) if len(s) > col_delta else None,
                 "sufixo": s[0] if s and s[0] else "",
                 "modelo": s[2] if len(s) > 2 else "",
             }
@@ -165,7 +203,39 @@ def buscar_cadeia_estruturada(ticker: str) -> dict | None:
         "ticker": ticker,
         "preco_base": raw.get("preco_base"),
         "expirations": expirations,
+        "data_ultimo_pregao": raw.get("data_ultimo_pregao"),
     }
+
+
+def vol_impl_mediana(cadeia: dict, tipo: str = None, limite_negocios: int = 1) -> float | None:
+    """
+    Calcula a mediana da volatilidade implícita (em decimal, ex: 0.28 = 28%)
+    das opções líquidas na cadeia. Retorna None se não houver dados.
+    `tipo`: "call", "put" ou None (ambos).
+    """
+    if not cadeia:
+        return None
+    vols = []
+    for venc in cadeia.get("expirations", []):
+        lados = []
+        if tipo in (None, "call"):
+            lados.append(venc.get("calls", {}))
+        if tipo in (None, "put"):
+            lados.append(venc.get("puts", {}))
+        for lado in lados:
+            for info in lado.values():
+                vi = info.get("vol_impl")
+                neg = info.get("negocios")
+                if vi is not None and vi > 0 and (neg or 0) >= limite_negocios:
+                    vols.append(vi)
+    if not vols:
+        return None
+    vols.sort()
+    n = len(vols)
+    meio = n // 2
+    if n % 2 == 1:
+        return vols[meio]
+    return (vols[meio - 1] + vols[meio]) / 2.0
 
 
 def _to_float(v):

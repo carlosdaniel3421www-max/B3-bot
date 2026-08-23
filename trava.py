@@ -166,11 +166,20 @@ def montar_trava(preco_atual: float, direcao: str,
     vencimento_data = None
     sufixo_comprado = None
     sufixo_vendido = None
+    vol_impl_comprado = None
+    vol_impl_vendido = None
+    delta_comprado = None
+    delta_vendido = None
 
     # Tenta usar dados reais da cadeia se disponível
     fonte = "estimativa"
+    sigma_real = sigma
     if cadeia_real and ticker:
-        from fonte_opcoes import buscar_melhor_vencimento, buscar_premio_real
+        from fonte_opcoes import buscar_melhor_vencimento, buscar_premio_real, vol_impl_mediana
+        # Usa a volatilidade implícita mediana real da cadeia (melhor que 30% fixo)
+        vi_mediana = vol_impl_mediana(cadeia_real, tipo=tipo)
+        if vi_mediana and vi_mediana > 0:
+            sigma_real = vi_mediana / 100.0  # API retorna percentual (ex: 35.2 = 35.2%)
         venc = buscar_melhor_vencimento(cadeia_real)
         if venc:
             dias_venc = venc["du"]
@@ -198,6 +207,8 @@ def montar_trava(preco_atual: float, direcao: str,
                     premio_comprado = round(lado[melhor_strike]["preco"], 2)
                     strike_comprado = melhor_strike
                     sufixo_comprado = lado[melhor_strike].get("sufixo") or ""
+                    vol_impl_comprado = lado[melhor_strike].get("vol_impl")
+                    delta_comprado = lado[melhor_strike].get("delta")
                     fonte = "real"
 
                     # Perna vendida: próximo strike com prêmio ~premio_alvo_perna2
@@ -217,6 +228,8 @@ def montar_trava(preco_atual: float, direcao: str,
                     if strike_vendido:
                         premio_vendido = round(lado[strike_vendido]["preco"], 2)
                         sufixo_vendido = lado[strike_vendido].get("sufixo") or ""
+                        vol_impl_vendido = lado[strike_vendido].get("vol_impl")
+                        delta_vendido = lado[strike_vendido].get("delta")
                     else:
                         # Fallback: strike mais distante com liquidez
                         strikes_ordenados = sorted(
@@ -236,22 +249,22 @@ def montar_trava(preco_atual: float, direcao: str,
     if not premio_comprado or not premio_vendido or fonte == "estimativa":
         fonte = "estimativa"
         strike_comprado = _encontrar_strike_por_premio(
-            preco_atual, dias_venc, tipo, premio_alvo_perna1, sigma)
-        premio_comprado = estimar_premio(preco_atual, strike_comprado, dias_venc, tipo, sigma)
+            preco_atual, dias_venc, tipo, premio_alvo_perna1, sigma_real)
+        premio_comprado = estimar_premio(preco_atual, strike_comprado, dias_venc, tipo, sigma_real)
 
         strike_vendido = _encontrar_strike_por_premio(
-            preco_atual, dias_venc, tipo, premio_alvo_perna2, sigma)
-        premio_vendido = estimar_premio(preco_atual, strike_vendido, dias_venc, tipo, sigma)
+            preco_atual, dias_venc, tipo, premio_alvo_perna2, sigma_real)
+        premio_vendido = estimar_premio(preco_atual, strike_vendido, dias_venc, tipo, sigma_real)
 
         # Garante que a perna vendida está do lado correto
         if direcao == "compra":
             if strike_vendido <= strike_comprado:
                 strike_vendido = _proximo_strike(strike_comprado, "cima")
-                premio_vendido = estimar_premio(preco_atual, strike_vendido, dias_venc, tipo, sigma)
+                premio_vendido = estimar_premio(preco_atual, strike_vendido, dias_venc, tipo, sigma_real)
         else:
             if strike_vendido >= strike_comprado:
                 strike_vendido = _proximo_strike(strike_comprado, "baixo")
-                premio_vendido = estimar_premio(preco_atual, strike_vendido, dias_venc, tipo, sigma)
+                premio_vendido = estimar_premio(preco_atual, strike_vendido, dias_venc, tipo, sigma_real)
 
     premio_vendido = max(premio_vendido or 0.0, 0.0)
     custo_liquido = round(premio_comprado - premio_vendido, 2)
@@ -298,6 +311,10 @@ def montar_trava(preco_atual: float, direcao: str,
         "vencimento_data": vencimento_data,
         "sufixo_comprado": sufixo_comprado,
         "sufixo_vendido": sufixo_vendido,
+        "vol_impl_comprado": vol_impl_comprado,
+        "vol_impl_vendido": vol_impl_vendido,
+        "delta_comprado": delta_comprado,
+        "delta_vendido": delta_vendido,
         "fonte": fonte,
         "observacao": (
             "Prêmios reais do último pregão (opcoes.net.br). Confirme a "
@@ -348,4 +365,14 @@ def formatar_trava(trava: dict, preco_atual: float) -> str:
         f"(a opção OTM valoriza forte nesse ponto)",
         f"  <i>{fonte_txt}</i>",
     ]
-    return "\n".join(linhas)
+    # Vol implícita e delta, se disponíveis (dados reais)
+    extras = []
+    vi1 = trava.get("vol_impl_comprado")
+    vi2 = trava.get("vol_impl_vendido")
+    if vi1 is not None:
+        extras.append(f"  📊 Vol impl.: {vi1*100:.1f}% / {vi2*100:.1f}%" if vi2 is not None else f"  📊 Vol impl.: {vi1*100:.1f}%")
+    d1 = trava.get("delta_comprado")
+    d2 = trava.get("delta_vendido")
+    if d1 is not None:
+        extras.append(f"  🎯 Delta: {d1:.2f} / {d2:.2f}" if d2 is not None else f"  🎯 Delta: {d1:.2f}")
+    return "\n".join(linhas + extras)

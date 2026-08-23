@@ -35,17 +35,41 @@ import matplotlib.dates as mdates
 # 1. COLETA DE DADOS
 # --------------------------------------------------------------------------
 
-def baixar_dados(ticker: str, periodo: str = "1y", intervalo: str = "1d", tentativas: int = 3) -> pd.DataFrame:
+def baixar_dados(ticker: str, periodo: str = "1y", intervalo: str = "1d", tentativas: int = 3,
+                 usar_cache: bool = True) -> pd.DataFrame:
     """
     Baixa dados históricos via yfinance. Ticker sem sufixo -> adiciona .SA (B3).
     Tenta novamente em caso de falha intermitente (comum no Yahoo Finance),
     com uma pequena pausa entre tentativas.
+
+    Se usar_cache=True, salva o DataFrame em cache/<ticker>_<periodo>.parquet e
+    reutiliza quando o arquivo for do mesmo dia — dados diários não mudam dentro
+    do pregão, evitando re-download a cada execução do workflow.
     """
+    import datetime
+    import os
+    import pickle
     import time
     import yfinance as yf
 
     if not ticker.upper().endswith(".SA"):
         ticker = ticker.upper() + ".SA"
+
+    # Cache diário (só para dados diários; intradiário nunca usa)
+    cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
+    cache_file = os.path.join(cache_dir, f"{ticker}_{periodo}.pkl")
+    if usar_cache and intervalo == "1d":
+        try:
+            if os.path.exists(cache_file):
+                mod_time = datetime.datetime.fromtimestamp(os.path.getmtime(cache_file)).date()
+                if mod_time == datetime.date.today():
+                    with open(cache_file, "rb") as f:
+                        df = pickle.load(f)
+                    df.index = pd.to_datetime(df.index)
+                    df.index.name = "date"
+                    return df
+        except Exception:
+            pass  # cache corrompido — re-baixa normalmente
 
     ultimo_erro = None
     for tentativa in range(1, tentativas + 1):
@@ -56,6 +80,14 @@ def baixar_dados(ticker: str, periodo: str = "1y", intervalo: str = "1d", tentat
                     df.columns = df.columns.get_level_values(0)
                 df = df.rename(columns=str.lower)
                 df.index.name = "date"
+                # Grava cache diário
+                if usar_cache and intervalo == "1d":
+                    try:
+                        os.makedirs(cache_dir, exist_ok=True)
+                        with open(cache_file, "wb") as f:
+                            pickle.dump(df, f)
+                    except Exception:
+                        pass
                 return df
             ultimo_erro = "Retorno vazio"
         except Exception as e:
