@@ -46,9 +46,9 @@ USAR_IA_ANALISE = True
 # Chave GRÁTIS do opencode zen (https://opencode.ai/auth -> Keys):
 # mesmo modelo que o opencode usa. Sem cartão de crédito.
 # Sem chave, volta pro Gemini puro.
-NEMOTRON_API_KEY = os.environ.get("NEMOTRON_API_KEY", "")
-NEMOTRON_MODEL = os.environ.get("NEMOTRON_MODEL", "nemotron-3-ultra-free")
-NEMOTRON_BASE_URL = os.environ.get("NEMOTRON_BASE_URL", "https://opencode.ai/zen/v1")
+CARLOS = os.environ.get("CARLOS", "")
+CARLOS_model = os.environ.get("CARLOS_model", "nemotron-3-ultra-free")
+CARLOS_base_url = os.environ.get("CARLOS_base_url", "https://opencode.ai/zen/v1")
 
 # --- Screener ---
 # Ativos que você opera.

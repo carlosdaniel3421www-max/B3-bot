@@ -64,9 +64,9 @@ class AIAnalyzer:
         model: Optional[str] = None,
         timeout_seconds: int = 45,
         max_retries: int = 3,
-        NEMOTRON_API_KEY: str = "",
-        NEMOTRON_MODEL: str = "nemotron-3.5-free",
-        NEMOTRON_BASE_URL: str = "https://opencode.ai/zen/v1",
+        CARLOS: str = "",
+        CARLOS_model: str = "nemotron-3.5-free",
+        CARLOS_base_url: str = "https://opencode.ai/zen/v1",
     ):
 
         self.api_key = api_key
@@ -77,11 +77,11 @@ class AIAnalyzer:
 
         self.max_retries = max_retries
 
-        self.NEMOTRON_API_KEY = NEMOTRON_API_KEY
+        self.CARLOS = CARLOS
 
-        self.NEMOTRON_MODEL = NEMOTRON_MODEL
+        self.CARLOS_model = CARLOS_model
 
-        self.NEMOTRON_BASE_URL = NEMOTRON_BASE_URL
+        self.CARLOS_base_url = CARLOS_base_url
 
         self._client = None
 
@@ -184,9 +184,9 @@ class AIAnalyzer:
 
         self.ultimo_erro_nemotron = None
 
-        if not self.NEMOTRON_API_KEY:
+        if not self.CARLOS:
             self.ultimo_erro_nemotron = (
-                "chave NEMOTRON_API_KEY ausente (secret não configurado no GitHub)"
+                "chave CARLOS ausente (secret não configurado no GitHub)"
             )
 
         if not self.api_key:
@@ -242,8 +242,8 @@ class AIAnalyzer:
 
         # --- HÍBRIDO: tenta Nemotron (raciocínio forte) primeiro ---
         # O Gemini só descreve o gráfico; o Nemotron faz a análise final.
-        if self.NEMOTRON_API_KEY:
-            print(f"[DEBUG] Calling Nemotron with model: {self.NEMOTRON_MODEL}")
+        if self.CARLOS:
+            print(f"[DEBUG] Calling Nemotron with model: {self.CARLOS_model}")
             resposta_nemotron = self._call_nemotron(prompt, chart_path)
             if resposta_nemotron:
                 self.ultimo_provedor = "nemotron"
@@ -965,7 +965,7 @@ Dados do robô:
         Retorna o JSON da análise. None se falhar (aí o fluxo volta pro
         Gemini puro, que enxerga a imagem).
         """
-        if not self.NEMOTRON_API_KEY:
+        if not self.CARLOS:
             return None
 
         try:
@@ -987,13 +987,13 @@ Dados do robô:
                 )
 
             client = OpenAI(
-                api_key=self.NEMOTRON_API_KEY,
-                base_url=self.NEMOTRON_BASE_URL,
+                api_key=self.CARLOS,
+                base_url=self.CARLOS_base_url,
                 timeout=self.timeout_seconds,
             )
 
             resposta = client.chat.completions.create(
-                model=self.NEMOTRON_MODEL,
+                model=self.CARLOS_model,
                 messages=[
                     {
                         "role": "system",
@@ -1015,10 +1015,10 @@ Dados do robô:
 
             logger.info(
                 "Nemotron (%s via %s) respondeu \u2014 análise feita pelo Nemotron",
-                self.NEMOTRON_MODEL,
-                self.NEMOTRON_BASE_URL,
+                self.CARLOS_model,
+                self.CARLOS_base_url,
             )
-            print(f"  [IA] Análise feita pelo Nemotron ({self.NEMOTRON_MODEL})")
+            print(f"  [IA] Análise feita pelo Nemotron ({self.CARLOS_model})")
             print(f"[DEBUG] Raw Nemotron len={len(texto)}: {texto[:600]}")
             print(f"[DEBUG] Nemotron fim: {texto[-200:]}")
 
@@ -1034,7 +1034,7 @@ Dados do robô:
                 or getattr(e, "status", None)
             )
             self.ultimo_erro = (
-                f"Nemotron ({self.NEMOTRON_MODEL}) falhou "
+                f"Nemotron ({self.CARLOS_model}) falhou "
                 f"(status={codigo_http}, tipo={type(e).__name__}): {e}"
             )
             self.ultimo_erro_nemotron = self.ultimo_erro
