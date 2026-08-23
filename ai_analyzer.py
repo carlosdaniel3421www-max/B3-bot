@@ -1002,7 +1002,7 @@ Dados do robô:
                     {"role": "user", "content": prompt_final},
                 ],
                 temperature=0.1,
-                max_tokens=2000,
+                max_tokens=4000,
             )
 
             choice = resposta.choices[0] if resposta.choices else None
@@ -1037,6 +1037,8 @@ Dados do robô:
             resultado = self._extract_json(texto)
             if resultado is None:
                 self.ultimo_erro = f"Falha ao parsear JSON do Nemotron. Resposta: {texto[:300]}"
+                logger.warning("Falha ao parsear JSON do Nemotron. Texto completo (len=%d): %s",
+                               len(texto), texto[:1500].replace('\n', ' '))
             return resultado
 
         except Exception as e:
