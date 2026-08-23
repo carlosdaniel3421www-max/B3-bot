@@ -22,7 +22,7 @@ from noticias import checar_risco_noticias
 from opcoes import sugerir_parametros_opcao
 from calendario import checar_resultado_proximo
 from gestao_risco import calcular_tamanho_posicao
-from estado import carregar_estado, salvar_estado, eh_alerta_novo, atualizar_estado, score_suavizado
+from estado import carregar_estado, salvar_estado, atualizar_estado, score_suavizado
 from ai_analyzer import AIAnalyzer
 from posicoes import carregar_posicoes, formatar_gestao_todas, salvar_proposta_entrada
 from b3_swing_analyzer import sugerir_stop_alvo, plotar_grafico, determinar_veredito
@@ -37,7 +37,7 @@ logging.basicConfig(
 )
 
 PASTA_GRAFICOS = "graficos_tmp"
-SCORE_MINIMO_IA = 7  # IA analisa todos os ativos com score >= esse valor
+SCORE_MINIMO_IA = 8  # IA analisa todos os ativos com score >= esse valor
 
 
 def validar_configuracao() -> None:
@@ -102,10 +102,6 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
 
     if direcao == "neutro" or score < nivel_detalhe:
         return f"{cabecalho}\n{motivos_txt}"
-
-    if not eh_alerta_novo(estado, ticker, score, direcao, nivel_detalhe):
-        data_alerta = estado.get(ticker, {}).get("data_primeiro_alerta", "?")
-        return f"{cabecalho}\n{motivos_txt}\n  ↻ Sinal mantido desde {data_alerta} — plano já enviado."
 
     # --- Alerta NOVO: checa notícias e calendário ---
     nome_empresa = config.NOME_EMPRESA.get(ticker, ticker)
