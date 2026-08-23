@@ -96,6 +96,7 @@ def test_formatar_trava_conteudo():
     assert "Ganho máx" in texto
     assert "Breakeven" in texto
     assert "Saia quando" in texto
+    assert "Vencimento" in texto
 
 
 def test_formatar_trava_venda():

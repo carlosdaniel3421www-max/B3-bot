@@ -163,6 +163,9 @@ def montar_trava(preco_atual: float, direcao: str,
     strike_comprado = None
     premio_vendido = None
     strike_vendido = None
+    vencimento_data = None
+    sufixo_comprado = None
+    sufixo_vendido = None
 
     # Tenta usar dados reais da cadeia se disponível
     fonte = "estimativa"
@@ -171,6 +174,7 @@ def montar_trava(preco_atual: float, direcao: str,
         venc = buscar_melhor_vencimento(cadeia_real)
         if venc:
             dias_venc = venc["du"]
+            vencimento_data = venc["dt"]
             lado = venc.get("calls" if tipo == "call" else "puts", {})
             if lado:
                 # Acha strike com prêmio mais próximo do alvo
@@ -186,6 +190,7 @@ def montar_trava(preco_atual: float, direcao: str,
                 if melhor_strike:
                     premio_comprado = round(lado[melhor_strike]["preco"], 2)
                     strike_comprado = melhor_strike
+                    sufixo_comprado = lado[melhor_strike].get("sufixo") or ""
                     fonte = "real"
 
                     # Perna vendida: próximo strike com prêmio ~premio_alvo_perna2
@@ -204,11 +209,13 @@ def montar_trava(preco_atual: float, direcao: str,
                             strike_vendido = strike
                     if strike_vendido:
                         premio_vendido = round(lado[strike_vendido]["preco"], 2)
+                        sufixo_vendido = lado[strike_vendido].get("sufixo") or ""
                     else:
                         # Fallback: strike mais distante disponível
                         strikes_ordenados = sorted(lado.keys())
                         strike_vendido = strikes_ordenados[-1] if direcao == "compra" else strikes_ordenados[0]
                         premio_vendido = round(lado[strike_vendido]["preco"], 2) if strike_vendido in lado and lado[strike_vendido]["preco"] else 0.0
+                        sufixo_vendido = lado[strike_vendido].get("sufixo") or ""
                 else:
                     strike_comprado = None
                     premio_comprado = None
@@ -276,6 +283,9 @@ def montar_trava(preco_atual: float, direcao: str,
         "gasto_maximo": gasto_maximo,
         "dentro_orcamento": dentro_orcamento,
         "dias_vencimento": dias_venc,
+        "vencimento_data": vencimento_data,
+        "sufixo_comprado": sufixo_comprado,
+        "sufixo_vendido": sufixo_vendido,
         "fonte": fonte,
         "observacao": (
             "Prêmios reais do último pregão (opcoes.net.br). Confirme a "
@@ -297,11 +307,24 @@ def formatar_trava(trava: dict, preco_atual: float) -> str:
     orcamento = "✅ dentro do orçamento" if trava.get("dentro_orcamento") else "⚠️ acima do orçamento de R$ {:.0f}".format(trava.get("gasto_maximo", GASTO_MAXIMO_PADRAO))
     fonte_txt = "📡 prêmio real (último pregão)" if trava.get("fonte") == "real" else "🧮 estimativa Black-Scholes"
 
+    # Código do strike (sufixo) entre parênteses, se disponível (dados reais)
+    sufixo1 = trava.get("sufixo_comprado")
+    sufixo2 = trava.get("sufixo_vendido")
+    cod1 = f" ({sufixo1})" if sufixo1 else ""
+    cod2 = f" ({sufixo2})" if sufixo2 else ""
+
+    # Data de vencimento: real (vencimento_data) ou estimativa (dias úteis)
+    if trava.get("vencimento_data"):
+        venc_txt = f"Vencimento: {trava['vencimento_data']} ({trava['dias_vencimento']} dias úteis)"
+    else:
+        venc_txt = f"Vencimento: ~{trava['dias_vencimento']} dias úteis (estimativa)"
+
     linhas = [
         f"  📈 <b>{trava['nome']}</b> (ativo R$ {preco_atual:.2f})",
-        f"  ➕ Comprar {tipo} strike R$ {trava['strike_comprado']:.2f} "
+        f"  📅 {venc_txt}",
+        f"  ➕ Comprar {tipo} strike R$ {trava['strike_comprado']:.2f}{cod1} "
         f"— prêmio R$ {trava['premio_comprado']:.2f}",
-        f"  ➖ Vender {tipo} strike R$ {trava['strike_vendido']:.2f} "
+        f"  ➖ Vender {tipo} strike R$ {trava['strike_vendido']:.2f}{cod2} "
         f"— prêmio R$ {trava['premio_vendido']:.2f}",
         f"  💰 Custo por contrato: R$ {trava['custo_liquido']:.2f}",
         f"  💵 Gasto total ({trava['contratos']} contratos): R$ {trava['custo_total']:.2f} "
