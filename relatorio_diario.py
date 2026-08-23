@@ -11,6 +11,7 @@ Relatório Diário — orquestra tudo:
      roda sempre, não depende de estado ou filtros de score.
 """
 
+import html
 import os
 import time
 import logging
@@ -261,15 +262,15 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
             resultado_ia = analisador.analyze_asset(
                 ticker=ticker,
                 current_price=float(r["preco"]),
-                ema21=float(ultimo["sma21"]),      # média móvel curta já calculada pelo robô (SMA21)
-                ema200=float(ultimo["sma200"]),    # média móvel longa já calculada pelo robô (SMA200)
+                ema21=float(ultimo["ema21"] if "ema21" in ultimo else ultimo["sma21"]),
+                ema200=float(ultimo["ema200"] if "ema200" in ultimo else ultimo["sma200"]),
                 rsi=float(ultimo["rsi"]),
                 macd=float(ultimo["macd"]),
                 volume=float(ultimo["volume"]),
                 atr=float(ultimo["atr"]),
                 support=float(ultimo["suporte"]),
                 resistance=float(ultimo["resistencia"]),
-                score=r["score"],
+                score=r.get("score_bruto", r["score"]),
                 direction=r["direcao"],
                 reasons=r["motivos"],
                 news=noticias_ativo,
@@ -282,8 +283,7 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
 
         if resultado_ia is None:
             motivo = getattr(analisador, "ultimo_erro", None) or "motivo desconhecido"
-            import html as _html
-            motivo_esc = _html.escape(str(motivo), quote=False)
+            motivo_esc = html.escape(str(motivo), quote=False)
             blocos_ia.append(
                 f"⚠️ <b>{ticker}</b> — IA indisponível ({motivo_esc}).\n"
                 f"O placar técnico acima já é válido e não depende da IA."
@@ -493,7 +493,7 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
         plotar_grafico(r["df"], r["ticker"], caminho)
         caminhos_graficos.append(caminho)
 
-    print("Montando resumo técnico...")
+    logging.info("Montando resumo técnico...")
     estado = carregar_estado(arquivo_estado)
     blocos = []
     for r in resultados:
@@ -560,7 +560,7 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
         cabecalho_msg += "\n" + "\n".join(resumo_vereditos) + "\n"
 
     # --- Gestão de posições abertas: o que fazer com o que já está operando ---
-    print("Montando gestão de posições abertas...")
+    logging.info("Montando gestão de posições abertas...")
     gestao_posicoes = montar_gestao_posicoes(resultados)
     if gestao_posicoes:
         cabecalho_msg += "\n" + gestao_posicoes + "\n"
@@ -593,7 +593,7 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
             enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, parte)
 
     # --- IA analisa visualmente e manda mensagem separada no final ---
-    print("Rodando análise visual da IA...")
+    logging.info("Rodando análise visual da IA...")
     mensagem_ia = rodar_analise_ia(resultados, arquivo_estado)
     if mensagem_ia:
         LIMITE_IA = 3800
@@ -614,7 +614,7 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
                 enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, parte)
 
     # --- TRAVA com preços reais + IA exclusiva: mensagem separada depois da IA ---
-    print("Montando travas com preços reais...")
+    logging.info("Montando travas com preços reais...")
     mensagem_trava = rodar_analise_trava_ia(resultados)
     if mensagem_trava:
         LIMITE_TRAVA = 3800

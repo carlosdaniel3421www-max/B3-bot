@@ -101,6 +101,9 @@ def atualizar_estado(estado: dict, ticker: str, score: int, direcao: str, nivel_
             "direcao": direcao,
             "data_primeiro_alerta": anterior.get("data_primeiro_alerta", date.today().isoformat())
                                      if anterior.get("direcao") == direcao else date.today().isoformat(),
+            # Preserva o histórico de scores para a suavização não quebrar
+            "score_history": anterior.get("score_history", []),
+            "ultima_data_score": anterior.get("ultima_data_score", ""),
         }
     elif score < limite_saida:
         estado.pop(ticker, None)  # caiu de vez -> esquece, próxima subida conta como sinal novo

@@ -76,6 +76,9 @@ def calcular_medias_moveis(df: pd.DataFrame) -> pd.DataFrame:
     df["sma21"] = df["close"].rolling(21).mean()
     df["sma50"] = df["close"].rolling(50).mean()
     df["sma200"] = df["close"].rolling(200).mean()
+    # EMA (exponencial) — usada pela IA como contexto adicional
+    df["ema21"] = df["close"].ewm(span=21, adjust=False).mean()
+    df["ema200"] = df["close"].ewm(span=200, adjust=False).mean()
     return df
 
 
@@ -85,8 +88,9 @@ def calcular_rsi(df: pd.DataFrame, periodo: int = 14) -> pd.DataFrame:
     perda = -delta.clip(upper=0)
     media_ganho = ganho.ewm(alpha=1 / periodo, min_periods=periodo, adjust=False).mean()
     media_perda = perda.ewm(alpha=1 / periodo, min_periods=periodo, adjust=False).mean()
-    rs = media_ganho / media_perda
-    df["rsi"] = 100 - (100 / (1 + rs))
+    # Evita divisão por zero: se não houve perdas no período, RSI = 100
+    rs = media_ganho / media_perda.replace(0, np.nan)
+    df["rsi"] = (100 - (100 / (1 + rs))).fillna(100)
     return df
 
 
@@ -102,7 +106,8 @@ def calcular_macd(df: pd.DataFrame, rapida=12, lenta=26, sinal=9) -> pd.DataFram
 def calcular_estocastico(df: pd.DataFrame, periodo=14, suavizacao=3) -> pd.DataFrame:
     minima = df["low"].rolling(periodo).min()
     maxima = df["high"].rolling(periodo).max()
-    df["stoch_k"] = 100 * (df["close"] - minima) / (maxima - minima)
+    faixa = (maxima - minima).replace(0, np.nan)  # evita divisão por zero em mercado plano
+    df["stoch_k"] = (100 * (df["close"] - minima) / faixa).fillna(50)
     df["stoch_d"] = df["stoch_k"].rolling(suavizacao).mean()
     return df
 
@@ -411,11 +416,13 @@ def avaliar_ativo_curto_prazo(df: pd.DataFrame) -> dict:
 
     # --- 3. MACD rápido (5/13/5) — momentum direcional puro ---
     atr_curto = ultimo["atr_curto"] if pd.notna(ultimo["atr_curto"]) else 0
-    diff_macd = ultimo["macd_curto"] - ultimo["macd_sinal_curto"]
+    diff_macd = (ultimo["macd_curto"] - ultimo["macd_sinal_curto"]) if pd.notna(ultimo["macd_curto"]) and pd.notna(ultimo["macd_sinal_curto"]) else None
     zona_morta_macd = 0.05 * atr_curto if atr_curto > 0 else 0
-    hist_cresceu = ultimo["macd_hist_curto"] > penultimo["macd_hist_curto"]
+    hist_cresceu = (ultimo["macd_hist_curto"] > penultimo["macd_hist_curto"]) if pd.notna(ultimo["macd_hist_curto"]) and pd.notna(penultimo["macd_hist_curto"]) else None
 
-    if abs(diff_macd) < zona_morta_macd:
+    if diff_macd is None or hist_cresceu is None:
+        pass  # dados insuficientes pro MACD rápido — não pontua
+    elif abs(diff_macd) < zona_morta_macd:
         pass
     elif diff_macd > 0:
         pts = 2 if hist_cresceu else 1
@@ -618,11 +625,13 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
 
     # --- 3. MACD — momentum direcional puro, não depende do regime ---
     atr_atual = ultimo["atr"] if pd.notna(ultimo["atr"]) else 0
-    diff_macd = ultimo["macd"] - ultimo["macd_sinal"]
+    diff_macd = (ultimo["macd"] - ultimo["macd_sinal"]) if pd.notna(ultimo["macd"]) and pd.notna(ultimo["macd_sinal"]) else None
     zona_morta_macd = 0.05 * atr_atual if atr_atual > 0 else 0
-    hist_cresceu = ultimo["macd_hist"] > penultimo["macd_hist"]
+    hist_cresceu = (ultimo["macd_hist"] > penultimo["macd_hist"]) if pd.notna(ultimo["macd_hist"]) and pd.notna(penultimo["macd_hist"]) else None
 
-    if abs(diff_macd) < zona_morta_macd:
+    if diff_macd is None or hist_cresceu is None:
+        pass  # dados insuficientes pro MACD — não pontua nem compra nem venda
+    elif abs(diff_macd) < zona_morta_macd:
         pass
     elif diff_macd > 0:
         pts = 2 if hist_cresceu else 1
@@ -750,8 +759,15 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
     # que tem avanço de preço + volume.
     volume_alto_sem_avancar = (
         volume_alto
-        and ganho_hoje < 0.005
-        and dias_altas_seguidas >= 3
+        and abs(ganho_hoje) < 0.005
+        and (dias_altas_seguidas >= 3 or dias_baixas_seguidas >= 3)
+    )
+    # MACD esticado no lado de baixa (histograma caindo forte)
+    macd_baixa_esticado = (
+        (ultimo["macd"] - ultimo["macd_sinal"]) < -zona_morta_macd
+        and ultimo["macd_hist"] < penultimo["macd_hist"]
+        if pd.notna(ultimo["macd"]) and pd.notna(ultimo["macd_sinal"]) and pd.notna(ultimo["macd_hist"]) and pd.notna(penultimo["macd_hist"])
+        else False
     )
 
     # Exaustão de COMPRA: tendência de alta esticada
@@ -764,7 +780,7 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
     exaustao_venda = (
         em_baixa
         and rsi < 25
-        and dias_baixas_seguidas >= 4
+        and (dias_baixas_seguidas >= 4 or macd_baixa_esticado)
     )
 
     if exaustao_compra and direcao == "compra":
@@ -861,7 +877,7 @@ def plotar_grafico(df: pd.DataFrame, ticker: str, caminho_saida: str):
             style=estilo,
             volume=True,
             addplot=plots_extras,
-            panel_ratios=(4, 1, 1),
+            panel_ratios=(4, 1, 1, 1),
             figsize=(largura_fig, 10),
             title=f"\n{ticker} — Análise Técnica (Swing Trade)",
             returnfig=True,

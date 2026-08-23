@@ -66,7 +66,7 @@ class AIAnalyzer:
         timeout_seconds: int = 45,
         max_retries: int = 3,
         CARLOS: str = "",
-        CARLOS_model: str = "nemotron-3.5-free",
+        CARLOS_model: str = "nemotron-3-ultra-free",
         CARLOS_base_url: str = "https://opencode.ai/zen/v1",
     ):
 
@@ -185,6 +185,8 @@ class AIAnalyzer:
 
         self.ultimo_erro_nemotron = None
 
+        self.ultimo_provedor = "gemini"
+
         if not self.CARLOS:
             self.ultimo_erro_nemotron = (
                 "chave CARLOS ausente (secret não configurado no GitHub)"
@@ -214,28 +216,32 @@ class AIAnalyzer:
 
 
 
-        payload = self._build_payload(
-            ticker=ticker,
-            current_price=current_price,
-            ema21=ema21,
-            ema200=ema200,
-            rsi=rsi,
-            macd=macd,
-            volume=volume,
-            atr=atr,
-            support=support,
-            resistance=resistance,
-            score=score,
-            direction=direction,
-            reasons=reasons,
-            news=news,
-            extra_context=extra_context
-        )
+        try:
+            payload = self._build_payload(
+                ticker=ticker,
+                current_price=current_price,
+                ema21=ema21,
+                ema200=ema200,
+                rsi=rsi,
+                macd=macd,
+                volume=volume,
+                atr=atr,
+                support=support,
+                resistance=resistance,
+                score=score,
+                direction=direction,
+                reasons=reasons,
+                news=news,
+                extra_context=extra_context
+            )
 
-
-        prompt = self._build_prompt(
-            payload
-        )
+            prompt = self._build_prompt(
+                payload
+            )
+        except Exception as e:
+            self.ultimo_erro = f"Falha ao construir payload/prompt ({type(e).__name__}): {e}"
+            logger.error("Falha ao construir payload/prompt", exc_info=True)
+            return None
 
 
         modelos_para_tentar = list(dict.fromkeys([self.model, *self.MODELOS_FALLBACK]))
@@ -353,11 +359,17 @@ class AIAnalyzer:
 
         match = re.search(r"retry in ([\d.]+)\s*s", texto, re.IGNORECASE)
         if match:
-            return float(match.group(1))
+            try:
+                return float(match.group(1))
+            except ValueError:
+                return None
 
         match = re.search(r"retryDelay['\"]?\s*:\s*['\"]?([\d.]+)\s*s", texto, re.IGNORECASE)
         if match:
-            return float(match.group(1))
+            try:
+                return float(match.group(1))
+            except ValueError:
+                return None
 
         return None
         
@@ -499,11 +511,12 @@ class AIAnalyzer:
                     str(
                         n.get(
                             "titulo",
-                            n
+                            ""
                         )
                     )
 
                     for n in (news or [])
+                    if isinstance(n, dict)
                 ]
 
         }
@@ -1095,23 +1108,48 @@ Dados do robô:
                 except json.JSONDecodeError:
                     continue
 
-        # Estratégia 3: Procura por JSON com campos esperados da resposta
-        import re
-        padroes_campos = [
-            r'\{[^{}]*"concorda_com_robo"[^{}]*\}',
-            r'\{[^{}]*"vale_operar"[^{}]*\}',
-            r'\{[^{}]*"entrada_agora"[^{}]*\}',
-            r'\{[^{}]*"preco_ideal_entrada"[^{}]*\}',
-            r'\{[^{}]*"setup"[^{}]*\}',
+        # Estratégia 3: Procura por JSON com campos esperados da resposta.
+        # Usa balanceamento de chaves (robusto a JSON aninhado) e só retorna
+        # objetos COMPLETOS — evita falso-positivo de fragmento parcial.
+        campos_esperados = [
+            "concorda_com_robo", "vale_operar", "entrada_agora",
+            "preco_ideal_entrada", "setup", "operacao",
         ]
 
-        for padrao in padroes_campos:
-            matches = re.findall(padrao, texto, re.DOTALL)
-            for match in reversed(matches):  # Tenta do final para o início
-                try:
-                    return json.loads(match)
-                except json.JSONDecodeError:
+        def _obj_com_campo(objeto):
+            return any(c in objeto for c in campos_esperados)
+
+        # Varre de trás pra frente procurando o objeto completo que tenha um campo esperado
+        for start_idx in range(len(texto) - 1, -1, -1):
+            if texto[start_idx] != '{':
+                continue
+            profundidade = 0
+            in_string = False
+            escape = False
+            for j in range(start_idx, len(texto)):
+                ch = texto[j]
+                if in_string:
+                    if escape:
+                        escape = False
+                    elif ch == '\\':
+                        escape = True
+                    elif ch == '"':
+                        in_string = False
                     continue
+                if ch == '"':
+                    in_string = True
+                elif ch == '{':
+                    profundidade += 1
+                elif ch == '}':
+                    profundidade -= 1
+                    if profundidade == 0:
+                        trecho = texto[start_idx:j+1]
+                        if _obj_com_campo(trecho):
+                            try:
+                                return json.loads(trecho)
+                            except json.JSONDecodeError:
+                                break
+                        break
 
         # Estratégia 4: Procura JSON no final da resposta usando balanceamento de chaves
         for start_idx in range(len(texto) - 1, -1, -1):
@@ -1466,11 +1504,23 @@ Dados do robô:
             resultado["vale_operar"] = True
             resultado["entrada_agora"] = True
             resultado["esperar_confirmacao"] = False
+            # Alinha a operação com a direção do robô (evita aprovar PUT em sinal de compra)
+            if original_direction == "compra":
+                resultado["operacao"] = "COMPRA"
+            elif original_direction == "venda":
+                resultado["operacao"] = "VENDA"
         else:
-            resultado["concorda_com_robo"] = False
             resultado["vale_operar"] = False
             resultado["entrada_agora"] = False
-            resultado["esperar_confirmacao"] = True
+            # 6-7 (AGUARDAR): a IA pode concordar com a espera; só força
+            # "discordo" se realmente for o caso. Abaixo de 6 (EVITAR), discorda.
+            if score_robo >= 6:
+                resultado["esperar_confirmacao"] = True
+                # Não força concorda=False — preserva o que a IA respondeu,
+                # pois "aguardar" pode significar concordância com o robô.
+            else:
+                resultado["concorda_com_robo"] = False
+                resultado["esperar_confirmacao"] = True
 
         return resultado
 

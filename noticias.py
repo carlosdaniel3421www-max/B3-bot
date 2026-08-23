@@ -33,7 +33,7 @@ PALAVRAS_POSITIVAS = [
 # OPOSTO de estar em recuperação judicial). Detecção simples por presença
 # na frase — não é 100% à prova de falhas, mas cobre os casos mais comuns.
 PALAVRAS_NEGACAO = [
-    "nega", "negou", "desmente", "desmentiu", "descarta", "descartou",
+    " nega ", " negou ", "desmente", "desmentiu", "descarta", "descartou",
     "rejeita", "rejeitou", "arquiva", "arquivou", "improcedente",
     "sem provas", "não confirma", "nao confirma", "nega rumor",
 ]
@@ -68,6 +68,7 @@ def classificar_noticias(noticias: list) -> dict:
     for n in noticias:
         titulo_lower = n["titulo"].lower()
         tem_negacao = any(neg in titulo_lower for neg in PALAVRAS_NEGACAO)
+        ja_classificada = False
 
         for palavra in PALAVRAS_RISCO:
             if palavra in titulo_lower:
@@ -75,7 +76,10 @@ def classificar_noticias(noticias: list) -> dict:
                     neutralizadas.append({**n, "motivo": palavra})
                 else:
                     alertas.append({**n, "motivo": palavra})
+                    ja_classificada = True
                 break
+        if ja_classificada:
+            continue  # não vai também para positivas
         for palavra in PALAVRAS_POSITIVAS:
             if palavra in titulo_lower:
                 positivas.append({**n, "motivo": palavra})

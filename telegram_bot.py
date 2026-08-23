@@ -19,9 +19,7 @@ processa mensagens novas (usa offset do Telegram) e as responde no chat.
 
 import json
 import logging
-import os
 import sys
-from datetime import date
 
 import requests
 

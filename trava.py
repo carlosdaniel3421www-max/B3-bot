@@ -232,8 +232,8 @@ def montar_trava(preco_atual: float, direcao: str,
                     strike_comprado = None
                     premio_comprado = None
 
-    # Se não conseguiu com dados reais, usa Black-Scholes
-    if not premio_comprado or fonte == "estimativa":
+    # Se não conseguiu com dados reais (falta perna comprada OU vendida), usa Black-Scholes
+    if not premio_comprado or not premio_vendido or fonte == "estimativa":
         fonte = "estimativa"
         strike_comprado = _encontrar_strike_por_premio(
             preco_atual, dias_venc, tipo, premio_alvo_perna1, sigma)
@@ -253,7 +253,7 @@ def montar_trava(preco_atual: float, direcao: str,
                 strike_vendido = _proximo_strike(strike_comprado, "baixo")
                 premio_vendido = estimar_premio(preco_atual, strike_vendido, dias_venc, tipo, sigma)
 
-    premio_vendido = max(premio_vendido, 0.0)
+    premio_vendido = max(premio_vendido or 0.0, 0.0)
     custo_liquido = round(premio_comprado - premio_vendido, 2)
     if custo_liquido < 0.05:
         custo_liquido = round(premio_comprado, 2)
