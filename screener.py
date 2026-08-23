@@ -19,7 +19,7 @@ WATCHLIST_PADRAO = [
 ]
 
 
-def rodar_screener(watchlist=None, periodo="6mo", pausa=0.3,
+def rodar_screener(watchlist=None, periodo="2y", pausa=0.3,
                     usar_curto_prazo: bool = False, projetar_volume: bool = False,
                     confirmar_intradiario: bool = False) -> list:
     """

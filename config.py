@@ -59,7 +59,7 @@ WATCHLIST = [
 ]
 
 NIVEL_DETALHE = 6          # nível mínimo (0-10) para receber plano de entrada completo
-PERIODO_HISTORICO = "6mo"  # período de dados baixado para os cálculos
+PERIODO_HISTORICO = "2y"   # período de dados baixado para os cálculos (2 anos p/ SMA200 e contexto histórico)
 
 # --- Gestão de risco (calculadora de tamanho de posição) ---
 CAPITAL_DISPONIVEL = 10000.0     # capital total que você usa pra operar (ajuste pro seu valor real)

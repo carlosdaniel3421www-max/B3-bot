@@ -808,8 +808,16 @@ def plotar_grafico(df: pd.DataFrame, ticker: str, caminho_saida: str):
         import mplfinance as mpf
         import matplotlib.pyplot as plt
 
+        # Mostra o histórico mais recente no gráfico (últimos ~500 candles,
+        # ~2 anos), dando contexto histórico pra IA sem ficar denso demais.
+        n_linhas = len(df)
+        if n_linhas > 550:
+            df_plot = df.iloc[-550:].copy()
+        else:
+            df_plot = df
+
         # Prepara DataFrame no formato que mplfinance exige
-        df_mpf = df[["open", "high", "low", "close", "volume"]].copy()
+        df_mpf = df_plot[["open", "high", "low", "close", "volume"]].copy()
         df_mpf.columns = ["Open", "High", "Low", "Close", "Volume"]
         df_mpf.index = pd.DatetimeIndex(df_mpf.index)
 
@@ -818,17 +826,20 @@ def plotar_grafico(df: pd.DataFrame, ticker: str, caminho_saida: str):
 
         preco_ref = float(df["close"].iloc[-1])
 
+        # Figura mais larga quando há mais dados, pra IA ler os candles sem apertar
+        largura_fig = 16 if len(df_mpf) > 350 else 14
+
         plots_extras = [
-            mpf.make_addplot(safe(df["sma21"], preco_ref), color="#ff7f0e", width=1.2),
-            mpf.make_addplot(safe(df["sma50"], preco_ref), color="#2ca02c", width=1.0),
-            mpf.make_addplot(safe(df["sma200"],preco_ref), color="#d62728", width=0.8),
-            mpf.make_addplot(safe(df["suporte"],  preco_ref), color="green", linestyle=":", width=0.8),
-            mpf.make_addplot(safe(df["resistencia"], preco_ref), color="red",  linestyle=":", width=0.8),
-            mpf.make_addplot(safe(df["rsi"], 50),         panel=1, color="blue",   width=0.9, ylabel="RSI"),
-            mpf.make_addplot([70] * len(df),              panel=1, color="red",    linestyle="--", width=0.5),
-            mpf.make_addplot([30] * len(df),              panel=1, color="green",  linestyle="--", width=0.5),
-            mpf.make_addplot(safe(df["macd"]),            panel=2, color="blue",   width=0.9, ylabel="MACD"),
-            mpf.make_addplot(safe(df["macd_sinal"]),      panel=2, color="orange", width=0.9),
+            mpf.make_addplot(safe(df_plot["sma21"], preco_ref), color="#ff7f0e", width=1.2),
+            mpf.make_addplot(safe(df_plot["sma50"], preco_ref), color="#2ca02c", width=1.0),
+            mpf.make_addplot(safe(df_plot["sma200"],preco_ref), color="#d62728", width=0.8),
+            mpf.make_addplot(safe(df_plot["suporte"],  preco_ref), color="green", linestyle=":", width=0.8),
+            mpf.make_addplot(safe(df_plot["resistencia"], preco_ref), color="red",  linestyle=":", width=0.8),
+            mpf.make_addplot(safe(df_plot["rsi"], 50),         panel=1, color="blue",   width=0.9, ylabel="RSI"),
+            mpf.make_addplot([70] * len(df_plot),              panel=1, color="red",    linestyle="--", width=0.5),
+            mpf.make_addplot([30] * len(df_plot),              panel=1, color="green",  linestyle="--", width=0.5),
+            mpf.make_addplot(safe(df_plot["macd"]),            panel=2, color="blue",   width=0.9, ylabel="MACD"),
+            mpf.make_addplot(safe(df_plot["macd_sinal"]),      panel=2, color="orange", width=0.9),
         ]
 
         mc = mpf.make_marketcolors(
@@ -850,10 +861,10 @@ def plotar_grafico(df: pd.DataFrame, ticker: str, caminho_saida: str):
             volume=True,
             addplot=plots_extras,
             panel_ratios=(4, 1, 1),
-            figsize=(14, 10),
+            figsize=(largura_fig, 10),
             title=f"\n{ticker} — Análise Técnica (Swing Trade)",
             returnfig=True,
-            warn_too_much_data=300,
+            warn_too_much_data=600,
         )
         fig.savefig(caminho_saida, dpi=130, bbox_inches="tight")
         plt.close(fig)
@@ -866,8 +877,12 @@ def plotar_grafico(df: pd.DataFrame, ticker: str, caminho_saida: str):
 
 def _plotar_grafico_linhas(df: pd.DataFrame, ticker: str, caminho_saida: str):
     """Gráfico de linhas — fallback caso mplfinance não esteja disponível."""
+    n_linhas = len(df)
+    if n_linhas > 550:
+        df = df.iloc[-550:].copy()
+
     fig, eixos = plt.subplots(
-        4, 1, figsize=(14, 12), sharex=True,
+        4, 1, figsize=(16, 12), sharex=True,
         gridspec_kw={"height_ratios": [3, 1, 1, 1]}
     )
     ax_preco, ax_vol, ax_rsi_stoch, ax_macd = eixos
