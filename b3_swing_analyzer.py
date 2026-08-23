@@ -877,7 +877,7 @@ def plotar_grafico(df: pd.DataFrame, ticker: str, caminho_saida: str):
             style=estilo,
             volume=True,
             addplot=plots_extras,
-            panel_ratios=(4, 1, 1, 1),
+            panel_ratios=(4, 1, 1),
             figsize=(largura_fig, 10),
             title=f"\n{ticker} — Análise Técnica (Swing Trade)",
             returnfig=True,
