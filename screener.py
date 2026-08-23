@@ -3,6 +3,7 @@ Screener — varre uma lista de ativos, calcula o nível (0-10) de cada um e
 retorna todos ranqueados do sinal mais forte para o mais fraco.
 """
 
+import logging
 import time
 from b3_swing_analyzer import (
     baixar_dados, calcular_indicadores, avaliar_ativo,
@@ -78,7 +79,7 @@ def rodar_screener(watchlist=None, periodo="2y", pausa=0.3,
                 "df": df,  # mantém o dataframe para uso posterior (gráfico, stop/alvo)
             })
         except Exception as e:
-            print(f"[aviso] Falha ao processar {ticker}: {e}")
+            logging.warning("Falha ao processar %s: %s", ticker, e)
         time.sleep(pausa)
 
     resultados.sort(key=lambda r: r["score"], reverse=True)

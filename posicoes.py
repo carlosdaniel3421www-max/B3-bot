@@ -36,6 +36,7 @@ Regras de gestão automática (quando o robô roda o relatório diário):
 
 import argparse
 import json
+import logging
 import os
 import sys
 from datetime import date, datetime
@@ -198,7 +199,8 @@ def _dias_corridos(data_entrada: str) -> int:
     try:
         d_entrada = datetime.strptime(data_entrada, "%Y-%m-%d").date()
         return (date.today() - d_entrada).days
-    except Exception:
+    except (ValueError, TypeError):
+        logging.warning("Data de entrada inválida no posicoes.json: %r", data_entrada)
         return 0
 
 

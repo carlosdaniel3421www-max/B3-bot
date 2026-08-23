@@ -21,6 +21,7 @@ Não é recomendação de investimento. A decisão final é sempre sua.
 """
 
 import argparse
+import logging
 import sys
 import numpy as np
 import pandas as pd
@@ -870,8 +871,7 @@ def plotar_grafico(df: pd.DataFrame, ticker: str, caminho_saida: str):
         plt.close(fig)
 
     except Exception as e:
-        # Fallback pro gráfico de linhas se mplfinance falhar por qualquer motivo
-        print(f"[aviso] mplfinance falhou ({e}), usando gráfico de linhas como fallback")
+        logging.warning("mplfinance falhou (%s), usando gráfico de linhas como fallback", e)
         _plotar_grafico_linhas(df, ticker, caminho_saida)
 
 

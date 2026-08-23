@@ -221,7 +221,7 @@ def main():
         resposta = processar_comando(token, msg_chat, texto)
         if resposta:
             responder(token, msg_chat, resposta)
-            print(f"[BOT] {texto} -> enviada resposta")
+            logging.info("Comando %s processado para chat %s", texto, msg_chat)
 
     if ultimo_id != offset:
         _salvar_offset(ultimo_id)

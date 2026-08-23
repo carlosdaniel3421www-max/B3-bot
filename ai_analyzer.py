@@ -243,14 +243,13 @@ class AIAnalyzer:
         # --- HÍBRIDO: tenta Nemotron (raciocínio forte) primeiro ---
         # O Gemini só descreve o gráfico; o Nemotron faz a análise final.
         if self.CARLOS:
-            print(f"[DEBUG] Calling Nemotron with model: {self.CARLOS_model}")
+            logger.info("Chamando Nemotron (%s) para análise híbrida.", self.CARLOS_model)
             resposta_nemotron = self._call_nemotron(prompt, chart_path)
             if resposta_nemotron:
                 self.ultimo_provedor = "nemotron"
                 logger.info(
                     "Hybrid IA OK para o ativo: Nemotron (resposta válida) — regra de consistência aplicada"
                 )
-                print("[DEBUG] Nemotron responded successfully")
                 return self._validate_response(
                     resposta_nemotron,
                     direction,
@@ -260,8 +259,7 @@ class AIAnalyzer:
                 "Nemotron indisponível (%s) — voltando pro Gemini puro.",
                 self.ultimo_erro,
             )
-            print(f"[DEBUG] Nemotron failed: {self.ultimo_erro}")
-            print("  [IA] Nemotron indisponível — usando Gemini puro")
+            logger.info("Nemotron indisponível — usando Gemini puro")
 
         for attempt in range(1, self.max_retries + 1):
 
@@ -406,8 +404,7 @@ class AIAnalyzer:
 
 
         except Exception:
-
-            pass
+            logger.warning("Falha ao calcular distâncias de suporte/resistência", exc_info=True)
 
 
 
@@ -1014,13 +1011,12 @@ Dados do robô:
                 return None
 
             logger.info(
-                "Nemotron (%s via %s) respondeu \u2014 análise feita pelo Nemotron",
+                "Nemotron (%s via %s) respondeu — análise feita pelo Nemotron",
                 self.CARLOS_model,
                 self.CARLOS_base_url,
             )
-            print(f"  [IA] Análise feita pelo Nemotron ({self.CARLOS_model})")
-            print(f"[DEBUG] Raw Nemotron len={len(texto)}: {texto[:600]}")
-            print(f"[DEBUG] Nemotron fim: {texto[-200:]}")
+            logger.info("Raw Nemotron: len=%d, inicio=%s, fim=%s",
+                        len(texto), texto[:200].replace('\n', ' '), texto[-200:].replace('\n', ' '))
 
             resultado = self._extract_json(texto)
             if resultado is None:
@@ -1240,8 +1236,8 @@ Dados do robô:
             )
 
 
-        except Exception:
-
+        except (TypeError, ValueError):
+            logger.warning("Campo 'confianca' da IA inválido, usando 0: %r", data.get("confianca"))
             confianca = 0
 
 

@@ -40,6 +40,41 @@ PASTA_GRAFICOS = "graficos_tmp"
 SCORE_MINIMO_IA = 7  # IA analisa todos os ativos com score >= esse valor
 
 
+def validar_configuracao() -> None:
+    """
+    Valida as configurações essenciais ANTES de rodar o relatório.
+    Falha rápido com mensagem clara em vez de deixar uma chave ausente
+    ser descoberta no meio do processamento (ex: enviar gráfico sem token).
+    """
+    faltando = []
+
+    # Telegram é obrigatório — sem ele nada é entregue
+    if not getattr(config, "TELEGRAM_TOKEN", "") or "COLOQUE" in str(getattr(config, "TELEGRAM_TOKEN", "")):
+        faltando.append("TELEGRAM_TOKEN (crie um bot no BotFather e configure o secret)")
+    if not getattr(config, "TELEGRAM_CHAT_ID", "") or "COLOQUE" in str(getattr(config, "TELEGRAM_CHAT_ID", "")):
+        faltando.append("TELEGRAM_CHAT_ID (seu chat id no Telegram)")
+
+    # Gemini é obrigatório para a análise de IA; sem ele o relatório ainda roda,
+    # mas a segunda opinião fica indisponível — avisamos mas não bloqueamos.
+    sem_gemini = not getattr(config, "GEMINI_API_KEY", "")
+    if sem_gemini:
+        logging.warning("GEMINI_API_KEY ausente — a análise de IA (segunda opinião) ficará indisponível.")
+
+    # Nemotron (CARLOS) é opcional — fallback silencioso para Gemini puro.
+    sem_nemotron = not getattr(config, "CARLOS", "")
+    if sem_nemotron:
+        logging.info("CARLOS (Nemotron) ausente — a análise usará Gemini puro.")
+
+    if faltando:
+        mensagem = (
+            "❌ Configuração incompleta — o relatório não pode rodar.\n"
+            + "\n".join(f"  • {item}" for item in faltando)
+            + "\nConfigure os secrets no GitHub: Settings → Secrets and variables → Actions."
+        )
+        logging.error("%s", mensagem)
+        raise SystemExit(mensagem)
+
+
 def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
                          atr_mult: float = 1.5, risco_retorno: float = 2.0,
                          risco_maximo_atr_mult: float = 3.0,
@@ -154,7 +189,7 @@ def _montar_analisador_ia() -> AIAnalyzer | None:
         return None
 
     nemotron_key = getattr(config, "CARLOS", "")
-    print(f"[DEBUG] CARLOS length: {len(nemotron_key)}")
+    logging.info("CARLOS (chave Nemotron) configurada: %s", "sim" if nemotron_key else "não")
     
     return AIAnalyzer(
         api_key=api_key,
@@ -209,7 +244,7 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
                 logging.warning("Falha ao buscar notícias de %s para a IA: %s", ticker, e, exc_info=True)
                 noticias_ativo = []
 
-            print(f"  [IA] Analisando {ticker}...")
+            logging.info("Analisando IA do ativo %s", ticker)
             resultado_ia = analisador.analyze_asset(
                 ticker=ticker,
                 current_price=float(r["preco"]),
@@ -313,13 +348,15 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
                               risco_maximo_atr_mult: float = None,
                               margem_saida_estado: int = None):
 
+    validar_configuracao()
+
     watchlist = watchlist or config.WATCHLIST
     periodo = periodo or config.PERIODO_HISTORICO
     nivel_detalhe = nivel_detalhe if nivel_detalhe is not None else config.NIVEL_DETALHE
     risco_maximo_atr_mult = risco_maximo_atr_mult if risco_maximo_atr_mult is not None else config.RISCO_MAXIMO_ATR_MULT
     margem_saida_estado = margem_saida_estado if margem_saida_estado is not None else config.MARGEM_SAIDA_ESTADO
 
-    print(f"[{titulo}] Rodando screener...")
+    logging.info("%s — Rodando screener...", titulo)
     resultados = rodar_screener(
         watchlist=watchlist, periodo=periodo,
         usar_curto_prazo=usar_curto_prazo, projetar_volume=projetar_volume,
@@ -334,7 +371,7 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
         )
         return
 
-    print("Gerando gráficos...")
+    logging.info("Gerando gráficos...")
     os.makedirs(PASTA_GRAFICOS, exist_ok=True)
     caminhos_graficos = []
     for r in resultados:
@@ -399,10 +436,10 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
 
     mensagem_final = cabecalho_msg + "\n\n".join(blocos)
 
-    print("Enviando álbum de gráficos...")
+    logging.info("Enviando álbum de gráficos...")
     enviar_album(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, caminhos_graficos)
 
-    print("Enviando resumo técnico...")
+    logging.info("Enviando resumo técnico...")
     LIMITE = 3800
     if len(mensagem_final) <= LIMITE:
         enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, mensagem_final)
@@ -441,7 +478,7 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
             for parte in partes_ia:
                 enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, parte)
 
-    print(f"[{titulo}] Concluído.")
+    logging.info("%s — Concluído.", titulo)
 
 
 if __name__ == "__main__":
