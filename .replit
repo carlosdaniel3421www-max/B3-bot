@@ -1,0 +1,1 @@
+run = "python servidor_api.py"
