@@ -376,3 +376,119 @@ def formatar_trava(trava: dict, preco_atual: float) -> str:
     if d1 is not None:
         extras.append(f"  🎯 Delta: {d1:.2f} / {d2:.2f}" if d2 is not None else f"  🎯 Delta: {d1:.2f}")
     return "\n".join(linhas + extras)
+
+
+def calcular_trava_manual(direcao: str, strike_comprado: float, premio_comprado: float,
+                          strike_vendido: float, premio_vendido: float,
+                          contratos: int = CONTRATOS_PADRAO,
+                          gasto_maximo: float = GASTO_MAXIMO_PADRAO) -> dict:
+    """
+    Calcula a trava usando os PRÊMIOS REAIS que o usuário vê no home broker
+    (os preços do último pregão podem oscilar antes de executar).
+
+    direcao: "compra" (Bull Call Spread) ou "venda" (Bear Put Spread)
+    strike_comprado: strike da perna COMPRADA
+    premio_comprado: prêmio atual da perna comprada (o que você pagaria)
+    strike_vendido: strike da perna VENDIDA
+    premio_vendido: prêmio atual da perna vendida (o que você receberia)
+
+    Retorna dict com custo líquido, risco, ganho, breakeven e se compensa.
+    """
+    direcao = direcao.lower()
+    if direcao not in ("compra", "venda"):
+        raise ValueError("direcao deve ser 'compra' ou 'venda'")
+
+    tipo = "call" if direcao == "compra" else "put"
+    nome = "TRAVA DE ALTA (Bull Call Spread)" if direcao == "compra" else "TRAVA DE BAIXA (Bear Put Spread)"
+
+    premio_comprado = max(float(premio_comprado), 0.0)
+    premio_vendido = max(float(premio_vendido), 0.0)
+    custo_liquido = round(premio_comprado - premio_vendido, 2)
+    if custo_liquido < 0.05:
+        custo_liquido = round(premio_comprado, 2)  # não pode ficar de graça
+
+    custo_total = round(custo_liquido * contratos, 2)
+
+    if direcao == "compra":
+        if strike_vendido <= strike_comprado:
+            raise ValueError("Na compra, o strike vendido deve ser MAIOR que o comprado")
+        largura = strike_vendido - strike_comprado
+        ganho_max = round((largura - custo_liquido) * contratos, 2)
+        breakeven = round(strike_comprado + custo_liquido, 2)
+        encerrar_quando = strike_comprado
+    else:
+        if strike_vendido >= strike_comprado:
+            raise ValueError("Na venda, o strike vendido deve ser MENOR que o comprado")
+        largura = strike_comprado - strike_vendido
+        ganho_max = round((largura - custo_liquido) * contratos, 2)
+        breakeven = round(strike_comprado - custo_liquido, 2)
+        encerrar_quando = strike_comprado
+
+    risco_max = custo_total
+    dentro_orcamento = custo_total <= gasto_maximo
+
+    # Relação risco/retorno (quantas vezes o ganho cobre o risco)
+    if risco_max > 0:
+        relacao_rr = round(ganho_max / risco_max, 2)
+    else:
+        relacao_rr = 0.0
+
+    compensa = (
+        dentro_orcamento
+        and custo_liquido > 0
+        and relacao_rr >= 2.0
+        and ganho_max > risco_max
+    )
+
+    return {
+        "nome": nome,
+        "direcao": direcao,
+        "tipo": tipo,
+        "strike_comprado": strike_comprado,
+        "strike_vendido": strike_vendido,
+        "premio_comprado": round(premio_comprado, 2),
+        "premio_vendido": round(premio_vendido, 2),
+        "custo_liquido": custo_liquido,
+        "contratos": contratos,
+        "custo_total": custo_total,
+        "risco_maximo": risco_max,
+        "ganho_maximo": ganho_max,
+        "relacao_risco_retorno": relacao_rr,
+        "breakeven": breakeven,
+        "encerrar_quando": encerrar_quando,
+        "gasto_maximo": gasto_maximo,
+        "dentro_orcamento": dentro_orcamento,
+        "compensa": compensa,
+        "fonte": "preco_real_manual",
+        "observacao": (
+            "Cálculo com os PREÇOS ATUAIS que você informou. Confirme a "
+            "liquidez (bid/ask e volume) das duas pernas antes de executar."
+        ),
+    }
+
+
+def formatar_trava_manual(trava: dict) -> str:
+    """
+    Formata o resultado da trava com preços manuais para envio no Telegram,
+    com veredito claro se compensa operar com os preços atuais.
+    """
+    tipo = trava["tipo"].upper()
+
+    if trava.get("compensa"):
+        veredito = "✅ COMPENSA OPERAR"
+    else:
+        veredito = "⚠️ AVALIAR (relação risco/retorno baixa ou fora do orçamento)"
+
+    orcamento = "✅ dentro do orçamento" if trava.get("dentro_orcamento") else "❌ acima do orçamento de R$ {:.0f}".format(trava.get("gasto_maximo", GASTO_MAXIMO_PADRAO))
+
+    linhas = [
+        f"  📈 <b>{trava['nome']}</b>",
+        f"  ➕ Comprar {tipo} {trava['strike_comprado']:.2f} — prêmio R$ {trava['premio_comprado']:.2f}",
+        f"  ➖ Vender {tipo} {trava['strike_vendido']:.2f} — prêmio R$ {trava['premio_vendido']:.2f}",
+        f"  💰 Custo líquido por contrato: R$ {trava['custo_liquido']:.2f}",
+        f"  💵 Gasto total ({trava['contratos']} contratos): R$ {trava['custo_total']:.2f} — {orcamento}",
+        f"  🛑 Risco máx: R$ {trava['risco_maximo']:.2f} | 🎯 Ganho máx: R$ {trava['ganho_maximo']:.2f}",
+        f"  ⚖️ Relação risco/retorno: 1:{trava['relacao_risco_retorno']} | Breakeven: R$ {trava['breakeven']:.2f}",
+        f"  🏁 <b>{veredito}</b>",
+    ]
+    return "\n".join(linhas)

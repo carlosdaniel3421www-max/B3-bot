@@ -25,6 +25,7 @@ import requests
 
 import config
 from diario_sinais import formatar_resumo_desempenho
+from trava import calcular_trava_manual, formatar_trava_manual
 from posicoes import (
     adicionar_posicao, carregar_posicoes, carregar_propostas, formatar_gestao_todas,
     gerar_gestao_posicao, remover_posicao, registrar_da_proposta,
@@ -186,6 +187,33 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
     if comando in ("/sinais", "/desempenho", "/performance"):
         return formatar_resumo_desempenho()
 
+    if comando in ("/trava", "/verificar"):
+        # /trava compra 10.86 0.22 11.56 0.09
+        # /trava venda 9.86 0.24 9.06 0.15
+        if len(args) < 5:
+            return (
+                "Uso: /trava DIRECAO STRIKE_COMPRA PREMIO_COMPRA STRIKE_VENDA PREMIO_VENDA\n"
+                "Você informa os PREÇOS ATUAIS que está vendo no home broker:\n"
+                "  /trava compra 10.86 0.22 11.56 0.09\n"
+                "  /trava venda 9.86 0.24 9.06 0.15\n"
+                "O robô calcula se a trava ainda compensa com esses preços."
+            )
+        try:
+            direcao = args[0].lower()
+            strike_comp = float(args[1])
+            premio_comp = float(args[2])
+            strike_vend = float(args[3])
+            premio_vend = float(args[4])
+            trava = calcular_trava_manual(
+                direcao, strike_comp, premio_comp, strike_vend, premio_vend,
+            )
+            return "🔒 <b>Trava com preços atuais</b>\n" + formatar_trava_manual(trava)
+        except ValueError as e:
+            return f"⚠️ {e}\nExemplo: /trava compra 10.86 0.22 11.56 0.09"
+        except Exception as e:
+            logging.warning("Erro ao calcular trava manual: %s", e)
+            return f"⚠️ Erro ao calcular: {str(e)[:200]}"
+
     if comando in ("/help", "/ajuda", "/start", "/comandos"):
         return (
             "🤖 <b>Comandos do robô:</b>\n"
@@ -196,7 +224,10 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
             "  /posicoes — mostra todas as posições + o que fazer hoje\n"
             "  /status TICKER — gestão de uma posição com preço atual\n"
             "  /propostas — propostas de entrada em aberto\n"
-            "  /sinais — taxa de acerto dos sinais que o robô já emitiu"
+            "  /sinais — taxa de acerto dos sinais que o robô já emitiu\n"
+            "  /trava DIRECAO STRIKE1 PREMIO1 STRIKE2 PREMIO2 — verifica se a\n"
+            "    trava compensa com os PREÇOS ATUAIS do home broker\n"
+            "    (ex: /trava compra 10.86 0.22 11.56 0.09)"
         )
 
     return None

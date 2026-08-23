@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """Testes do módulo de trava (Bull Call Spread / Bear Put Spread)."""
 import pytest
-from trava import montar_trava, formatar_trava, estimar_premio, _arredondar_strike, _proximo_strike
+from trava import (
+    montar_trava, formatar_trava, estimar_premio, _arredondar_strike, _proximo_strike,
+    calcular_trava_manual, formatar_trava_manual,
+)
 
 
 def test_montar_trava_compra():
@@ -103,3 +106,71 @@ def test_formatar_trava_venda():
     trava = montar_trava(45.0, "venda")
     texto = formatar_trava(trava, 45.0)
     assert "TRAVA DE BAIXA" in texto
+
+
+def test_calcular_trava_manual_compra():
+    # compra 10.86 @ 0.22, vende 11.56 @ 0.09
+    trava = calcular_trava_manual("compra", 10.86, 0.22, 11.56, 0.09)
+    assert trava["custo_liquido"] == 0.13
+    assert trava["custo_total"] == 13.0
+    assert trava["risco_maximo"] == 13.0
+    # largura = 0.70, ganho = (0.70 - 0.13) * 100 = 57
+    assert trava["ganho_maximo"] == 57.0
+    assert trava["breakeven"] == 10.99
+    assert trava["dentro_orcamento"] is True
+    assert trava["compensa"] is True
+    assert trava["relacao_risco_retorno"] == 4.38
+
+
+def test_calcular_trava_manual_venda():
+    # venda 9.86 @ 0.24, vende 9.06 @ 0.15 (preço real do V906)
+    trava = calcular_trava_manual("venda", 9.86, 0.24, 9.06, 0.15)
+    assert trava["custo_liquido"] == 0.09
+    assert trava["custo_total"] == 9.0
+    # largura = 0.80, ganho = (0.80 - 0.09) * 100 = 71
+    assert trava["ganho_maximo"] == 71.0
+    assert trava["dentro_orcamento"] is True
+    assert trava["compensa"] is True
+
+
+def test_calcular_trava_manual_compensa_falso():
+    # Prêmio vendido muito caro -> custo alto, risco/retorno ruim
+    trava = calcular_trava_manual("compra", 10.86, 0.50, 11.56, 0.40)
+    assert trava["custo_liquido"] == 0.10
+    assert trava["custo_total"] == 10.0
+    # largura = 0.70, ganho = (0.70 - 0.10) * 100 = 60
+    assert trava["ganho_maximo"] == 60.0
+    assert trava["relacao_risco_retorno"] == 6.0
+    assert trava["dentro_orcamento"] is True
+
+
+def test_calcular_trava_manual_acima_orcamento():
+    # Prêmios caros -> custo total acima de R$ 40
+    trava = calcular_trava_manual("compra", 10.86, 0.60, 11.56, 0.10)
+    assert trava["custo_liquido"] == 0.50
+    assert trava["custo_total"] == 50.0
+    assert trava["dentro_orcamento"] is False
+
+
+def test_calcular_trava_manual_strike_invalido_compra():
+    with pytest.raises(ValueError):
+        calcular_trava_manual("compra", 11.56, 0.22, 10.86, 0.09)  # vendido < comprado
+
+
+def test_calcular_trava_manual_strike_invalido_venda():
+    with pytest.raises(ValueError):
+        calcular_trava_manual("venda", 9.06, 0.24, 9.86, 0.15)  # vendido > comprado
+
+
+def test_calcular_trava_manual_direcao_invalida():
+    with pytest.raises(ValueError):
+        calcular_trava_manual("neutro", 10.86, 0.22, 11.56, 0.09)
+
+
+def test_formatar_trava_manual_conteudo():
+    trava = calcular_trava_manual("compra", 10.86, 0.22, 11.56, 0.09)
+    texto = formatar_trava_manual(trava)
+    assert "COMPENSA OPERAR" in texto
+    assert "Risco máx" in texto
+    assert "Ganho máx" in texto
+    assert "Breakeven" in texto
