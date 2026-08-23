@@ -183,9 +183,9 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
         f"  ✅ Se ENTRAR, registre: responda <b>/registrar {ticker}</b> no chat."
     )
 
-    # --- TRAVA: para sinais FORTES (score >= 9) mostra a estrutura de duas
+    # --- TRAVA: para sinais FORTES (score >= 8) mostra a estrutura de duas
     # pernas (risco limitado). É a estratégia preferida em pontuação alta. ---
-    if score >= 9 and direcao in ("compra", "venda"):
+    if score >= 8 and direcao in ("compra", "venda"):
         try:
             trava = montar_trava(resultado["preco"], direcao)
             plano += "\n" + formatar_trava(trava, resultado["preco"])
