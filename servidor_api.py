@@ -1,17 +1,12 @@
 """
-Servidor 24/7 para o robô B3-bot — roda no Replit continuamente.
-Usa WEBHOOK do Telegram (resposta instantânea, sem delay de 5 min).
+Servidor 24/7 com webhook Telegram — roda no Render, Replit ou qualquer servidor.
+Responde comandos INSTANTANEAMENTE (sem delay de 5 min do GitHub Actions).
 
-Quando você manda um comando no Telegram, o Telegram chama este servidor
-na hora, o robô processa e responde imediatamente.
-
-USO (no Replit):
-    python servidor_api.py
-
-Configuração (secrets no Replit):
-    TELEGRAM_TOKEN    (obrigatório)
-    GEMINI_API_KEY    (opcional, para IA)
-    CARLOS            (opcional, para Nemotron)
+Configuração (secrets no Render/Replit):
+    TELEGRAM_TOKEN      (obrigatório) — token do seu bot
+    TELEGRAM_CHAT_ID    (obrigatório) — seu chat id (só você pode usar)
+    GEMINI_API_KEY      (opcional, para IA)
+    CARLOS              (opcional, para Nemotron)
 """
 
 import json
@@ -30,9 +25,15 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 TOKEN = getattr(config, "TELEGRAM_TOKEN", "")
+CHAT_ID_AUTORIZADO = str(getattr(config, "TELEGRAM_CHAT_ID", ""))
+
 if not TOKEN:
-    logger.error("TELEGRAM_TOKEN não configurado! Configure como secret no Replit.")
+    logger.error("TELEGRAM_TOKEN não configurado! Configure como secret no Render.")
     sys.exit(1)
+
+if not CHAT_ID_AUTORIZADO:
+    logger.warning("TELEGRAM_CHAT_ID não configurado! O servidor responderá QUALQUER pessoa.")
+    logger.warning("Para segurança, configure TELEGRAM_CHAT_ID como secret no Render.")
 
 WEBHOOK_URL = ""  # será preenchido ao iniciar
 
@@ -73,6 +74,11 @@ def webhook():
     texto = msg.get("text") or ""
 
     if not texto or not chat_id:
+        return jsonify({"ok": True})
+
+    # Filtro de segurança: só responde pro dono do bot
+    if CHAT_ID_AUTORIZADO and chat_id != CHAT_ID_AUTORIZADO:
+        logger.info("Ignorado comando de chat não autorizado: %s", chat_id)
         return jsonify({"ok": True})
 
     # Processa o comando (reusa toda a lógica do Telegram)
