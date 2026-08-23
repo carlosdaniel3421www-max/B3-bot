@@ -136,19 +136,13 @@ def montar_trava(preco_atual: float, direcao: str,
                  premio_alvo_perna1: float = None, premio_alvo_perna2: float = None,
                  contratos: int = CONTRATOS_PADRAO,
                  gasto_maximo: float = GASTO_MAXIMO_PADRAO,
-                 dias_venc: int = 35, sigma: float = 0.30) -> dict:
+                 dias_venc: int = 35, sigma: float = 0.30,
+                 cadeia_real: dict = None, ticker: str = None) -> dict:
     """
-    Monta uma trava baseada em PRÊMIO-ALVO (estratégia do usuário de comprar
-    opções baratas OTM).
-
-    - A perna COMPRADA é o strike cujo prêmio estimado ≈ premio_alvo_perna1
-      (default R$ 0,25) — opção barata, bem fora do dinheiro.
-    - A perna VENDIDA é o strike ainda mais OTM com prêmio ≈ premio_alvo_perna2
-      (default R$ 0,08), reduzindo o custo líquido.
-    - `contratos` (default 100) e `gasto_maximo` (default R$ 40) refletem a
-      forma como o usuário opera.
-
-    Retorna dict com as duas pernas, prêmios, custo total, risco e ganho.
+    Monta uma trava baseada em PRÊMIO-ALVO.
+    Se `cadeia_real` for fornecido, busca os strikes e prêmios na cadeia
+    real do opcoes.net.br em vez de usar Black-Scholes.
+    `ticker` é necessário para buscar dados reais na cadeia.
     """
     direcao = direcao.lower()
     if direcao not in ("compra", "venda"):
@@ -164,31 +158,86 @@ def montar_trava(preco_atual: float, direcao: str,
         tipo = "put"
         nome = "TRAVA DE BAIXA (Bear Put Spread)"
 
-    # Perna comprada: strike que custa ~premio_alvo_perna1 (barato, OTM)
-    strike_comprado = _encontrar_strike_por_premio(
-        preco_atual, dias_venc, tipo, premio_alvo_perna1, sigma)
-    premio_comprado = estimar_premio(preco_atual, strike_comprado, dias_venc, tipo, sigma)
+    # Inicializa as variáveis antes de tentar dados reais (evita UnboundLocalError)
+    premio_comprado = None
+    strike_comprado = None
+    premio_vendido = None
+    strike_vendido = None
 
-    # Perna vendida: ainda mais OTM (prêmio ~premio_alvo_perna2), reduz custo
-    # Base = preco_atual do ativo (não o strike comprado)
-    strike_vendido = _encontrar_strike_por_premio(
-        preco_atual, dias_venc, tipo, premio_alvo_perna2, sigma)
-    premio_vendido = estimar_premio(preco_atual, strike_vendido, dias_venc, tipo, sigma)
+    # Tenta usar dados reais da cadeia se disponível
+    fonte = "estimativa"
+    if cadeia_real and ticker:
+        from fonte_opcoes import buscar_melhor_vencimento, buscar_premio_real
+        venc = buscar_melhor_vencimento(cadeia_real)
+        if venc:
+            dias_venc = venc["du"]
+            lado = venc.get("calls" if tipo == "call" else "puts", {})
+            if lado:
+                # Acha strike com prêmio mais próximo do alvo
+                melhor_strike = None
+                melhor_dist = float("inf")
+                for strike, info in lado.items():
+                    if info["preco"] is None:
+                        continue
+                    dist = abs(info["preco"] - premio_alvo_perna1)
+                    if dist < melhor_dist:
+                        melhor_dist = dist
+                        melhor_strike = strike
+                if melhor_strike:
+                    premio_comprado = round(lado[melhor_strike]["preco"], 2)
+                    strike_comprado = melhor_strike
+                    fonte = "real"
 
-    # Garante que a perna vendida está do lado correto (mais OTM que a comprada)
-    if direcao == "compra":
-        if strike_vendido <= strike_comprado:
-            strike_vendido = _proximo_strike(strike_comprado, "cima")
-            premio_vendido = estimar_premio(preco_atual, strike_vendido, dias_venc, tipo, sigma)
-    else:
-        if strike_vendido >= strike_comprado:
-            strike_vendido = _proximo_strike(strike_comprado, "baixo")
-            premio_vendido = estimar_premio(preco_atual, strike_vendido, dias_venc, tipo, sigma)
+                    # Perna vendida: próximo strike com prêmio ~premio_alvo_perna2
+                    strike_vendido = None
+                    melhor_dist2 = float("inf")
+                    for strike, info in sorted(lado.items()):
+                        if info["preco"] is None:
+                            continue
+                        if direcao == "compra" and strike <= strike_comprado:
+                            continue
+                        if direcao == "venda" and strike >= strike_comprado:
+                            continue
+                        dist = abs(info["preco"] - premio_alvo_perna2)
+                        if dist < melhor_dist2:
+                            melhor_dist2 = dist
+                            strike_vendido = strike
+                    if strike_vendido:
+                        premio_vendido = round(lado[strike_vendido]["preco"], 2)
+                    else:
+                        # Fallback: strike mais distante disponível
+                        strikes_ordenados = sorted(lado.keys())
+                        strike_vendido = strikes_ordenados[-1] if direcao == "compra" else strikes_ordenados[0]
+                        premio_vendido = round(lado[strike_vendido]["preco"], 2) if strike_vendido in lado and lado[strike_vendido]["preco"] else 0.0
+                else:
+                    strike_comprado = None
+                    premio_comprado = None
+
+    # Se não conseguiu com dados reais, usa Black-Scholes
+    if not premio_comprado or fonte == "estimativa":
+        fonte = "estimativa"
+        strike_comprado = _encontrar_strike_por_premio(
+            preco_atual, dias_venc, tipo, premio_alvo_perna1, sigma)
+        premio_comprado = estimar_premio(preco_atual, strike_comprado, dias_venc, tipo, sigma)
+
+        strike_vendido = _encontrar_strike_por_premio(
+            preco_atual, dias_venc, tipo, premio_alvo_perna2, sigma)
+        premio_vendido = estimar_premio(preco_atual, strike_vendido, dias_venc, tipo, sigma)
+
+        # Garante que a perna vendida está do lado correto
+        if direcao == "compra":
+            if strike_vendido <= strike_comprado:
+                strike_vendido = _proximo_strike(strike_comprado, "cima")
+                premio_vendido = estimar_premio(preco_atual, strike_vendido, dias_venc, tipo, sigma)
+        else:
+            if strike_vendido >= strike_comprado:
+                strike_vendido = _proximo_strike(strike_comprado, "baixo")
+                premio_vendido = estimar_premio(preco_atual, strike_vendido, dias_venc, tipo, sigma)
 
     premio_vendido = max(premio_vendido, 0.0)
     custo_liquido = round(premio_comprado - premio_vendido, 2)
     if custo_liquido < 0.05:
-        custo_liquido = round(premio_comprado, 2)  # não pode ficar de graça
+        custo_liquido = round(premio_comprado, 2)
 
     # Custo total pelo número de contratos
     custo_total = round(custo_liquido * contratos, 2)
@@ -227,8 +276,11 @@ def montar_trava(preco_atual: float, direcao: str,
         "gasto_maximo": gasto_maximo,
         "dentro_orcamento": dentro_orcamento,
         "dias_vencimento": dias_venc,
-        "fonte": "estimativa",
+        "fonte": fonte,
         "observacao": (
+            "Prêmios reais do último pregão (opcoes.net.br). Confirme a "
+            "liquidez (volume/negócios) antes de operar."
+            if fonte == "real" else
             "Prêmios estimados por Black-Scholes (volatilidade histórica) — "
             "NÃO é cotação real. Confirme os prêmios e a liquidez das duas "
             "pernas no seu home broker ou OpLab antes de operar."
@@ -243,6 +295,7 @@ def formatar_trava(trava: dict, preco_atual: float) -> str:
     """
     tipo = trava["tipo"].upper()
     orcamento = "✅ dentro do orçamento" if trava.get("dentro_orcamento") else "⚠️ acima do orçamento de R$ {:.0f}".format(trava.get("gasto_maximo", GASTO_MAXIMO_PADRAO))
+    fonte_txt = "📡 prêmio real (último pregão)" if trava.get("fonte") == "real" else "🧮 estimativa Black-Scholes"
 
     linhas = [
         f"  📈 <b>{trava['nome']}</b> (ativo R$ {preco_atual:.2f})",
@@ -258,5 +311,6 @@ def formatar_trava(trava: dict, preco_atual: float) -> str:
         f"  ⚖️ Breakeven: R$ {trava['breakeven']:.2f}",
         f"  ⏳ Saia quando o ativo chegar perto de R$ {trava['encerrar_quando']:.2f} "
         f"(a opção OTM valoriza forte nesse ponto)",
+        f"  <i>{fonte_txt}</i>",
     ]
     return "\n".join(linhas)

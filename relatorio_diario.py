@@ -183,15 +183,6 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
         f"  ✅ Se ENTRAR, registre: responda <b>/registrar {ticker}</b> no chat."
     )
 
-    # --- TRAVA: para sinais FORTES (score >= 8) mostra a estrutura de duas
-    # pernas (risco limitado). É a estratégia preferida em pontuação alta. ---
-    if score >= 8 and direcao in ("compra", "venda"):
-        try:
-            trava = montar_trava(resultado["preco"], direcao)
-            plano += "\n" + formatar_trava(trava, resultado["preco"])
-        except Exception as e:
-            logging.warning("Falha ao montar trava de %s: %s", ticker, e)
-
     if risco_noticias.get("positivas"):
         plano += f"\n  ✅ {risco_noticias['positivas'][0]['titulo']}"
 
@@ -323,6 +314,105 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
         f"(interpreta o que o robô já calculou — não substitui o placar técnico).\n\n"
     )
     return cabecalho + "\n\n".join(blocos_ia)
+
+
+def rodar_analise_trava_ia(resultados: list) -> str:
+    """
+    Monta a TRAVA (Bull/Bear Spread) com preços REAIS do opcoes.net.br para
+    os ativos com score >= 8, e pede à IA (Nemotron/Gemini) uma leitura
+    EXCLUSIVA sobre a estrutura — com certeza do que comprar/vender.
+
+    Retorna string formatada para envio em mensagem separada, DEPOIS da
+    análise de IA geral. Vazio se não houver ativos com score suficiente.
+    """
+    from fonte_opcoes import buscar_cadeia_estruturada
+    from trava import montar_trava, formatar_trava
+
+    candidatos = [
+        r for r in resultados
+        if r.get("score_bruto", r["score"]) >= 8 and r["direcao"] in ("compra", "venda")
+    ]
+    if not candidatos:
+        return ""
+
+    analisador = _montar_analisador_ia()
+    blocos = []
+    hoje = date.today().strftime("%d/%m/%Y")
+
+    for r in candidatos[:4]:  # máximo 4 pra não estourar limite da IA
+        ticker = r["ticker"]
+        direcao = r["direcao"]
+        preco = float(r["preco"])
+
+        try:
+            cadeia = buscar_cadeia_estruturada(ticker)
+            trava = montar_trava(preco, direcao, cadeia_real=cadeia, ticker=ticker)
+        except Exception as e:
+            logging.warning("Falha ao montar trava real de %s: %s", ticker, e)
+            continue
+
+        bloco_trava = formatar_trava(trava, preco)
+
+        # --- IA exclusiva sobre a trava ---
+        opiniao_ia = ""
+        if analisador is not None:
+            try:
+                prompt_trava = (
+                    f"Analise EXCLUSIVAMENTE esta TRAVA de opções da B3 para {ticker} "
+                    f"(preço atual R$ {preco:.2f}, direção do robô: {direcao}).\n\n"
+                    f"{bloco_trava}\n\n"
+                    "Diga com CERTEZA o que deve fazer: comprar a perna (strike e prêmio), "
+                    "vender a perna, e se o custo total e a relação risco/retorno compensam. "
+                    "Responda APENAS com JSON:\n"
+                    '{"recomendacao": "ex: comprar CALL 10.86 e vender CALL 11.31", '
+                    '"compensa": true/false, "risco_retorno_ok": true/false, '
+                    '"explicacao": "por que", "cuidados": "liquidez, vencimento, etc"}'
+                )
+                opiniao_ia = analisador._call_nemotron(prompt_trava)
+                provedor = "Nemotron"
+                if opiniao_ia:
+                    opiniao_ia = analisador._validate_response(opiniao_ia, direcao, r.get("score_bruto", r["score"]))
+                    if opiniao_ia:
+                        opiniao_ia = analisador.format_telegram_message(opiniao_ia)
+                    else:
+                        opiniao_ia = ""
+                else:
+                    opiniao_ia = ""
+                if not opiniao_ia:
+                    # fallback Gemini
+                    resposta_g = analisador._call_gemini(
+                        analisador._get_client(), prompt_trava, None,
+                        modelo=analisador.model,
+                    )
+                    if resposta_g:
+                        resposta_g = analisador._validate_response(
+                            resposta_g, direcao, r.get("score_bruto", r["score"])
+                        )
+                        if resposta_g:
+                            opiniao_ia = analisador.format_telegram_message(resposta_g)
+                            provedor = "Gemini"
+            except Exception as e:
+                logging.warning("Falha na IA exclusiva da trava de %s: %s", ticker, e)
+                opiniao_ia = ""
+
+        if opiniao_ia:
+            bloco_trava += (
+                f"\n\n  🧠 <b>Leitura da IA ({provedor}):</b>\n"
+                f"{opiniao_ia}"
+            )
+
+        blocos.append(f"🔒 <b>{ticker}</b> — R$ {preco:.2f} ({direcao.upper()})\n{bloco_trava}")
+        time.sleep(6)
+
+    if not blocos:
+        return ""
+
+    cabecalho = (
+        f"🔒 <b>Trava de opções com preços reais — {hoje}</b>\n"
+        f"Estrutura de duas pernas (risco limitado) para os ativos com sinal forte, "
+        f"com prêmios do último pregão (opcoes.net.br) e leitura exclusiva da IA.\n\n"
+    )
+    return cabecalho + "\n\n".join(blocos)
 
 
 def montar_gestao_posicoes(resultados: list) -> str:
@@ -521,6 +611,27 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
             if atual:
                 partes_ia.append(atual)
             for parte in partes_ia:
+                enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, parte)
+
+    # --- TRAVA com preços reais + IA exclusiva: mensagem separada depois da IA ---
+    print("Montando travas com preços reais...")
+    mensagem_trava = rodar_analise_trava_ia(resultados)
+    if mensagem_trava:
+        LIMITE_TRAVA = 3800
+        if len(mensagem_trava) <= LIMITE_TRAVA:
+            enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, mensagem_trava)
+        else:
+            partes_tr = []
+            atual = ""
+            for bloco in mensagem_trava.split("\n\n"):
+                if len(atual) + len(bloco) + 2 > LIMITE_TRAVA:
+                    partes_tr.append(atual)
+                    atual = bloco
+                else:
+                    atual = f"{atual}\n\n{bloco}" if atual else bloco
+            if atual:
+                partes_tr.append(atual)
+            for parte in partes_tr:
                 enviar_mensagem(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID, parte)
 
     logging.info("%s — Concluído.", titulo)
