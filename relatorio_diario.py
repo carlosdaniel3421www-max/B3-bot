@@ -234,7 +234,7 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
 
     candidatos = [
         r for r in resultados
-        if r.get("score_bruto", r["score"]) >= SCORE_MINIMO_IA and r["direcao"] != "neutro"
+        if r["score"] >= SCORE_MINIMO_IA and r["direcao"] != "neutro"
     ]
     if not candidatos:
         return "🤖 <b>Análise da IA:</b> Nenhum ativo com sinal suficiente para análise hoje."
@@ -270,7 +270,7 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
                 atr=float(ultimo["atr"]),
                 support=float(ultimo["suporte"]),
                 resistance=float(ultimo["resistencia"]),
-                score=r.get("score_bruto", r["score"]),
+                score=r["score"],
                 direction=r["direcao"],
                 reasons=r["motivos"],
                 news=noticias_ativo,
@@ -549,7 +549,12 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
         # no dia seguinte por oscilação comum do mercado)
         score_estavel = score_suavizado(estado, r["ticker"], r["score"])
         r["score"] = score_estavel
+        r["motivos"] = r.get("motivos", [])
 
+    # Reordena pelo score SUAVIZADO (decrescente), com tiebreaker pelo bruto
+    resultados.sort(key=lambda r: (r["score"], r.get("score_bruto", r["score"])), reverse=True)
+
+    for r in resultados:
         caminho = os.path.join(PASTA_GRAFICOS, f"{r['ticker']}_{arquivo_estado.replace('.json','')}.png")
         blocos.append(montar_bloco_resumo(
             r, estado, nivel_detalhe,
