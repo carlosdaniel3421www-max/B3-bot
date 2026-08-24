@@ -8,5 +8,21 @@
     "quantidade": 100,
     "data_entrada": "2026-08-20",
     "prazo_maximo_dias": 20
+  },
+  "CMIG4": {
+    "ticker": "CMIG4",
+    "direcao": "venda",
+    "tipo_operacao": "trava",
+    "strike_comprado": 9.86,
+    "strike_vendido": 9.06,
+    "premio_comprado": 0.3,
+    "premio_vendido": 0.08,
+    "preco_entrada": 0.22,
+    "stop": 0.11,
+    "alvo": 0.44,
+    "quantidade": 100,
+    "vencimento": "2026-10-1612:21",
+    "data_entrada": "2026-08-24",
+    "prazo_maximo_dias": 20
   }
 }
