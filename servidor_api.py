@@ -38,6 +38,35 @@ if not CHAT_ID_AUTORIZADO:
 WEBHOOK_URL = ""  # será preenchido ao iniciar
 
 
+def _baixar_estado_do_github():
+    """
+    Na inicialização, baixa o posicoes.json do GitHub para restaurar o estado.
+    O disco do Render é efêmero — sem isso, reinícios perdem as posições.
+    """
+    import requests as req
+
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        logger.info("GITHUB_TOKEN ausente — usando estado local (se houver).")
+        return
+
+    repo = "carlosdaniel3421www-max/B3-bot"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
+
+    for arquivo in ("posicoes.json", "propostas.json"):
+        url = f"https://api.github.com/repos/{repo}/contents/{arquivo}"
+        try:
+            resp = req.get(url, headers=headers, timeout=15)
+            if resp.status_code == 200:
+                import base64
+                conteudo = base64.b64decode(resp.json().get("content", "")).decode("utf-8")
+                with open(arquivo, "w", encoding="utf-8") as f:
+                    f.write(conteudo)
+                logger.info("Estado restaurado do GitHub: %s", arquivo)
+        except Exception as e:
+            logger.warning("Falha ao baixar %s do GitHub: %s", arquivo, e)
+
+
 def _responder_telegram(chat_id, texto):
     """Envia resposta pro Telegram via API."""
     import requests
@@ -151,6 +180,8 @@ def _configurar_webhook():
 
 if __name__ == "__main__":
     logger.info("Iniciando servidor B3-bot...")
+    # Restaura posições/propostas do GitHub antes de atender comandos
+    _baixar_estado_do_github()
     _configurar_webhook()
 
     porta = int(os.environ.get("PORT", "8080"))
