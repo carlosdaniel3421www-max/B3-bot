@@ -3,3 +3,9 @@ __pycache__/
 *_analise.png
 graficos_tmp/
 cache/
+
+# Arquivos de estado/posições — sincronizados via GitHub API (posicoes.py),
+# não devem ir por commit manual para evitar conflito com a versão do servidor
+posicoes.json
+propostas.json
+telegram_offset.json
