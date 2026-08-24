@@ -4,9 +4,61 @@ from unittest.mock import patch
 from telegram_bot import processar_comando
 
 
+def test_analisar_posicoes_sem_posicoes():
+    with patch("telegram_bot.carregar_posicoes", return_value={}):
+        resposta = processar_comando("fake", 1, "/analisar_posicoes")
+        assert "Nenhuma posição" in resposta
+
+
+def test_analisar_posicoes_sem_ia():
+    posicoes = {
+        "PETR4": {
+            "ticker": "PETR4", "direcao": "compra",
+            "preco_entrada": 43.11, "stop": 40.5, "alvo": 48.22,
+            "quantidade": 100, "data_entrada": "2026-08-20", "prazo_maximo_dias": 20,
+        }
+    }
+    with patch("telegram_bot.carregar_posicoes", return_value=posicoes):
+        with patch("telegram_bot._precos_posicoes", return_value={"PETR4": 42.0}):
+            with patch("telegram_bot._montar_analisador_ia", return_value=None):
+                resposta = processar_comando("fake", 1, "/analisar_posicoes")
+                assert "IA não configurada" in resposta
+
+
+def test_analisar_posicoes_com_ia():
+    posicoes = {
+        "LREN3": {
+            "ticker": "LREN3", "direcao": "venda", "tipo_operacao": "trava",
+            "strike_comprado": 9.67, "strike_vendido": 8.47,
+            "premio_comprado": 0.29, "premio_vendido": 0.08,
+            "preco_entrada": 0.21, "stop": 0.10, "alvo": 0.42,
+            "quantidade": 100, "vencimento": "2026-10-16",
+            "data_entrada": "2026-08-24", "prazo_maximo_dias": 20,
+        }
+    }
+    # Mock analisador
+    analisador_mock = type("Analisador", (), {
+        "_call_nemotron": lambda self, p: {"analises": [
+            {"ticker": "LREN3", "acao": "manter", "explicacao": "dentro do plano",
+             "risco": "liquidez"},
+        ]},
+        "_call_gemini": lambda self, c, p, i, modelo=None: None,
+        "_get_client": lambda self: None,
+        "model": "x",
+    })()
+    with patch("telegram_bot.carregar_posicoes", return_value=posicoes):
+        with patch("telegram_bot._precos_posicoes", return_value={"LREN3": 10.83}):
+            with patch("telegram_bot._montar_analisador_ia", return_value=analisador_mock):
+                resposta = processar_comando("fake", 1, "/analisar_posicoes")
+                assert "Análise das posições" in resposta
+                assert "LREN3" in resposta
+                assert "MANTER" in resposta
+
+
 def test_comando_nao_reconhecido():
     resposta = processar_comando("fake", 1, "/naoexiste")
     assert resposta is None
+
 
 
 def test_ajuda_lista_comandos():

@@ -25,6 +25,7 @@ import requests
 
 import config
 from diario_sinais import formatar_resumo_desempenho
+from ai_analyzer import AIAnalyzer
 from trava import calcular_trava_manual, formatar_trava_manual
 from posicoes import (
     adicionar_posicao, adicionar_trava, carregar_posicoes, carregar_propostas,
@@ -214,6 +215,9 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
             logging.warning("Erro ao calcular trava manual: %s", e)
             return f"⚠️ Erro ao calcular: {str(e)[:200]}"
 
+    if comando in ("/analisar_posicoes", "/analisar", "/gestao_ia"):
+        return _analisar_posicoes_ia()
+
     if comando in ("/relatorio", "/report", "/diario"):
         return _acionar_relatorio_github()
 
@@ -274,6 +278,7 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
         return (
             "🤖 <b>Comandos do robô:</b>\n"
             "  /relatorio — dispara o relatório diário completo (gráficos + IA + travas)\n"
+            "  /analisar_posicoes — IA analisa suas posições abertas (manter/ajustar/sair)\n"
             "  /registrar TICKER — registra a posição que o robô propôs\n"
             "  /registrar TICKER DIRECAO PRECO STOP ALVO — registra QUALQUER\n"
             "    operação sua (ex: /registrar PETR4 compra 43.11 40.50 48.22)\n"
@@ -328,6 +333,110 @@ def _acionar_relatorio_github() -> str:
             return f"⚠️ Erro ao disparar relatório (código {r.status_code}): {r.text[:200]}"
     except requests.RequestException as e:
         return f"⚠️ Erro de rede ao acionar o relatório: {e}"
+
+
+def _montar_analisador_ia() -> AIAnalyzer | None:
+    """Cria o AIAnalyzer (Gemini + Nemotron) se as chaves estiverem configuradas."""
+    api_key = getattr(config, "GEMINI_API_KEY", "")
+    if not api_key:
+        return None
+    return AIAnalyzer(
+        api_key=api_key,
+        model=getattr(config, "GEMINI_MODEL", None),
+        timeout_seconds=getattr(config, "GEMINI_TIMEOUT_SECONDS", 45),
+        max_retries=getattr(config, "GEMINI_MAX_RETRIES", 3),
+        CARLOS=getattr(config, "CARLOS", ""),
+        CARLOS_model=getattr(config, "CARLOS_model", "nemotron-3-ultra-free"),
+        CARLOS_base_url=getattr(config, "CARLOS_base_url", "https://opencode.ai/zen/v1"),
+    )
+
+
+def _analisar_posicoes_ia() -> str:
+    """
+    Puxa a IA para analisar TODAS as posições abertas (ações e travas).
+    Monta um resumo de cada posição com preço atual e pede à IA uma leitura
+    clara: manter, ajustar stop/alvo, ou sair.
+    """
+    import html as _html
+
+    posicoes = carregar_posicoes()
+    if not posicoes:
+        return "📋 Nenhuma posição aberta para analisar."
+
+    precos = _precos_posicoes(posicoes)
+
+    # Monta o resumo textual das posições
+    resumo = []
+    for ticker, posicao in posicoes.items():
+        tipo = "TRAVA" if posicao.get("tipo_operacao") == "trava" else "AÇÃO"
+        direcao = posicao.get("direcao", "?")
+        preco_atual = precos.get(ticker)
+        preco_txt = f"R$ {preco_atual:.2f}" if preco_atual else "N/D"
+
+        if tipo == "TRAVA":
+            resumo.append(
+                f"• {ticker} — TRAVA {direcao} ({posicao.get('strike_comprado')}/{posicao.get('strike_vendido')})\n"
+                f"    Débito por contrato: R$ {posicao.get('preco_entrada', 0):.2f}\n"
+                f"    Stop no prêmio: R$ {posicao.get('stop', 0):.2f} · Alvo no prêmio: R$ {posicao.get('alvo', 0):.2f}\n"
+                f"    Vencimento: {posicao.get('vencimento', 'N/D')}"
+            )
+        else:
+            resumo.append(
+                f"• {ticker} — {direcao.upper()} (ação)\n"
+                f"    Entrada: R$ {posicao.get('preco_entrada', 0):.2f} · Preço atual: {preco_txt}\n"
+                f"    Stop: R$ {posicao.get('stop', 0):.2f} · Alvo: R$ {posicao.get('alvo', 0):.2f}"
+            )
+
+    prompt = (
+        "Você é um gestor de risco experiente em swing trade na B3. Analise estas "
+        "POSIÇÕES ABERTAS e diga o que fazer com cada uma:\n\n"
+        + "\n\n".join(resumo)
+        + "\n\nPara cada posição, avalie: manter, ajustar stop/alvo, ou sair. "
+        "Responda APENAS com JSON no formato:\n"
+        '{"analises": [{"ticker": "...", "acao": "manter|ajustar|sair", '
+        '"explicacao": "...", "risco": "..."}]}'
+    )
+
+    analisador = _montar_analisador_ia()
+    if analisador is None:
+        return "❌ IA não configurada. Adicione GEMINI_API_KEY."
+
+    try:
+        resposta = analisador._call_nemotron(prompt)
+        provedor = "Nemotron"
+        if not resposta:
+            resposta = analisador._call_gemini(
+                analisador._get_client(), prompt, None, modelo=analisador.model,
+            )
+            provedor = "Gemini"
+    except Exception as e:
+        logging.warning("Falha na IA ao analisar posições: %s", e)
+        return f"⚠️ Erro ao analisar posições: {str(e)[:200]}"
+
+    if not resposta:
+        return "⚠️ A IA não conseguiu analisar as posições agora. Tente novamente."
+
+    # Formata a resposta
+    analises = resposta.get("analises", []) if isinstance(resposta, dict) else []
+    if not analises:
+        # Se não veio no formato esperado, tenta usar o dict cru
+        return "🧠 <b>Análise da IA:</b>\n" + str(resposta)[:1500]
+
+    linhas = ["🧠 <b>Análise das posições (" + provedor + "):</b>"]
+    emoji_acao = {"manter": "✅", "ajustar": "⚙️", "sair": "🚪"}
+    for a in analises:
+        ticker = a.get("ticker", "?")
+        acao = a.get("acao", "?")
+        emoji = emoji_acao.get(acao.lower(), "❓")
+        explicacao = _html.escape(str(a.get("explicacao", "")), quote=False)
+        risco = _html.escape(str(a.get("risco", "")), quote=False)
+        linhas.append(f"\n{emoji} <b>{ticker}</b> — {acao.upper()}")
+        if explicacao:
+            linhas.append(f"  💡 {explicacao}")
+        if risco:
+            linhas.append(f"  ⚠️ {risco}")
+
+    return "\n".join(linhas)
 
 
 def main():
