@@ -406,6 +406,14 @@ def rodar_analise_trava_ia(resultados: list) -> str:
                     f"{bloco_trava}\n\n"
                     "Avalie se a trava vale a pena: custo, risco/retorno, liquidez e "
                     "realismo do prazo (confirme que o vencimento é o próximo mensal).\n"
+                    "REGRAS IMPORTANTES:\n"
+                    "- Sobre LIQUIDEZ: use APENAS os dados de negócios/volume que aparecem "
+                    "na trava acima (linha 'Liquidez'). NÃO invente nem especule que um "
+                    "strike 'não tem liquidez' se os dados mostram negócios > 0.\n"
+                    "- Se os dados mostram negócios e volume reais, considere a trava "
+                    "executável.\n"
+                    "- Baseie o veredito principalmente em: custo vs ganho máximo, "
+                    "relação risco/retorno, e se o preço está perto da zona de lucro.\n"
                     "Responda APENAS com JSON, com os campos exatos:\n"
                     '{"fazer_trava": true/false, '
                     '"nivel_certeza": "0 a 100", '
@@ -418,6 +426,8 @@ def rodar_analise_trava_ia(resultados: list) -> str:
                 if opiniao_ia:
                     opiniao_ia = _formatar_veredito_trava(opiniao_ia)
                 else:
+                    motivo = getattr(analisador, "ultimo_erro", "motivo desconhecido")
+                    logging.info("Nemotron na trava de %s falhou (%s) — usando Gemini", ticker, motivo)
                     opiniao_ia = ""
                 if not opiniao_ia:
                     resposta_g = analisador._call_gemini(
