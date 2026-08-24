@@ -74,7 +74,7 @@ def baixar_dados(ticker: str, periodo: str = "1y", intervalo: str = "1d", tentat
     ultimo_erro = None
     for tentativa in range(1, tentativas + 1):
         try:
-            df = yf.download(ticker, period=periodo, interval=intervalo, auto_adjust=True, progress=False)
+            df = yf.download(ticker, period=periodo, interval=intervalo, progress=False)
             if not df.empty:
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)

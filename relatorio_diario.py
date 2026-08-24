@@ -364,7 +364,7 @@ def rodar_analise_trava_ia(resultados: list) -> str:
 
     candidatos = [
         r for r in resultados
-        if r.get("score_bruto", r["score"]) >= 8 and r["direcao"] in ("compra", "venda")
+        if r["score"] >= 8 and r["direcao"] in ("compra", "venda")
     ]
     if not candidatos:
         return ""
@@ -481,7 +481,7 @@ def montar_gestao_posicoes(resultados: list) -> str:
 
             df = yf.download(
                 [f"{t}.SA" for t in faltantes], period="5d", interval="1d",
-                auto_adjust=True, progress=False, group_by="ticker",
+                progress=False, group_by="ticker",
             )
             for t in faltantes:
                 try:

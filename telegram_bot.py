@@ -85,7 +85,7 @@ def _precos_posicoes(posicoes: dict) -> dict:
     try:
         df = yf.download(
             [f"{t}.SA" for t in tickers], period="5d", interval="1d",
-            auto_adjust=True, progress=False, group_by="ticker",
+            progress=False, group_by="ticker",
         )
         for t in tickers:
             try:

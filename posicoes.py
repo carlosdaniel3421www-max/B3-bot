@@ -84,6 +84,7 @@ def _sincronizar_github(arquivo: str):
     reinicia (disco efêmero). Falha silenciosa se token ausente.
     """
     import base64
+    import urllib.parse
     import requests
 
     token = os.environ.get("GITHUB_TOKEN", "")
@@ -91,11 +92,15 @@ def _sincronizar_github(arquivo: str):
         return False
 
     nome_arquivo = os.path.basename(arquivo)
+    if not os.path.exists(arquivo):
+        logging.warning("Arquivo %s não existe para sincronizar com o GitHub", arquivo)
+        return False
     with open(arquivo, "r", encoding="utf-8") as f:
         conteudo = f.read()
 
     # Busca o SHA atual do arquivo (necessário para atualizar)
-    url_arquivo = f"https://api.github.com/repos/{REPO_GITHUB}/contents/{nome_arquivo}"
+    nome_codificado = urllib.parse.quote(nome_arquivo, safe="")
+    url_arquivo = f"https://api.github.com/repos/{REPO_GITHUB}/contents/{nome_codificado}"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
 
     try:
@@ -136,6 +141,7 @@ def carregar_propostas() -> dict:
 def salvar_propostas(propostas: dict):
     with open(CAMINHO_PROPOSTAS, "w", encoding="utf-8") as f:
         json.dump(propostas, f, ensure_ascii=False, indent=2)
+    _sincronizar_github(CAMINHO_PROPOSTAS)
 
 
 def salvar_proposta_entrada(ticker: str, direcao: str, preco: float,
@@ -503,7 +509,7 @@ def main():
         try:
             import yfinance as yf
             import pandas as pd
-            df = yf.download(f"{ticker}.SA", period="5d", interval="1d", auto_adjust=True, progress=False)
+            df = yf.download(f"{ticker}.SA", period="5d", interval="1d", progress=False)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             df = df.rename(columns=str.lower)
