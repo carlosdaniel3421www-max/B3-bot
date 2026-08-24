@@ -210,3 +210,36 @@ def test_trava_registrar_valor_invalido():
         "/trava_registrar CMIG4 compra 10.86 abc 11.56 0.09 0.065 0.45",
     )
     assert "Valor inválido" in resposta
+
+
+def test_sanitizar_html_escapa_menores_maiores():
+    from servidor_api import _sanitizar_html
+    assert _sanitizar_html("a < b > c") == "a &lt; b &gt; c"
+
+
+def test_sanitizar_html_preserva_tags_permitidas():
+    from servidor_api import _sanitizar_html
+    assert _sanitizar_html("<b>CMIG4</b> ok") == "<b>CMIG4</b> ok"
+    assert _sanitizar_html("Trava <b>10.86</b> < 9.0") == "Trava <b>10.86</b> &lt; 9.0"
+
+
+def test_sanitizar_html_vazio():
+    from servidor_api import _sanitizar_html
+    assert _sanitizar_html("") == ""
+    assert _sanitizar_html(None) is None
+
+
+def test_webhook_erro_processamento_nao_fica_silencioso():
+    from unittest.mock import patch, MagicMock
+    import servidor_api as sa
+
+    update = {"message": {"chat": {"id": "1"}, "text": "/relatorio"}}
+    with patch.object(sa, "CHAT_ID_AUTORIZADO", "1"):
+        with patch.object(sa, "processar_comando", side_effect=RuntimeError("boom")):
+            with patch.object(sa, "_responder_telegram") as mock_responder:
+                with sa.app.test_request_context("/webhook", method="POST", json=update):
+                    resp = sa.webhook()
+                    assert resp.status_code == 200
+                    mock_responder.assert_called_once()
+                    texto = mock_responder.call_args[0][1]
+                    assert "Erro interno" in texto

@@ -67,6 +67,29 @@ def _baixar_estado_do_github():
             logger.warning("Falha ao baixar %s do GitHub: %s", arquivo, e)
 
 
+def _sanitizar_html(texto: str) -> str:
+    """
+    Escapa '<' e '>' que NÃO fazem parte de tags HTML permitidas pelo
+    Telegram. Evita que conteúdo da IA (com <, >) quebre a formatação.
+    """
+    if not texto:
+        return texto
+    import re
+    # Tags permitidas pelo Telegram (parse_mode=HTML)
+    tags_permitidas = re.compile(
+        r"(</?(?:b|strong|i|em|u|s|code|pre|tg-spoiler|a)\b[^>]*>)",
+        re.IGNORECASE,
+    )
+    partes = tags_permitidas.split(texto)
+    saida = []
+    for i, parte in enumerate(partes):
+        if i % 2 == 1:
+            saida.append(parte)  # tag permitida — mantém como está
+        else:
+            saida.append(parte.replace("<", "&lt;").replace(">", "&gt;"))
+    return "".join(saida)
+
+
 def _responder_telegram(chat_id, texto):
     """Envia resposta pro Telegram via API."""
     import requests
@@ -74,7 +97,7 @@ def _responder_telegram(chat_id, texto):
     try:
         r = requests.post(url, data={
             "chat_id": chat_id,
-            "text": texto,
+            "text": _sanitizar_html(texto),
             "parse_mode": "HTML",
         })
         if not r.ok:
@@ -112,7 +135,12 @@ def webhook():
 
     # Processa o comando (reusa toda a lógica do Telegram)
     logger.info("Comando recebido: %s", texto)
-    resposta = processar_comando(TOKEN, chat_id, texto)
+    try:
+        resposta = processar_comando(TOKEN, chat_id, texto)
+    except Exception as e:
+        # Nunca deixa um erro de processamento virar silêncio pro usuário
+        logger.exception("Erro inesperado ao processar comando %s: %s", texto, e)
+        resposta = "⚠️ Erro interno ao processar o comando. Tente novamente em instantes."
 
     if resposta:
         _responder_telegram(chat_id, resposta)
