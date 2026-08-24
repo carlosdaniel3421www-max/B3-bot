@@ -229,13 +229,30 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
         try:
             ticker = args[0].upper()
             tipo = args[1].lower()
-            strike_comp = float(args[2])
-            premio_comp = float(args[3])
-            strike_vend = float(args[4])
-            premio_vend = float(args[5])
-            stop_premio = float(args[6])
-            alvo_premio = float(args[7])
-            vencimento = args[8] if len(args) > 8 else ""
+
+            # Separa os números dos demais argumentos, ignorando datas
+            # (ex: 2026-10-16) que não são números.
+            numeros = []
+            vencimento = ""
+            for arg in args[2:]:
+                if "-" in arg or "/" in arg:
+                    vencimento = arg  # é uma data de vencimento
+                    continue
+                try:
+                    numeros.append(float(arg))
+                except ValueError:
+                    return f"⚠️ Valor inválido: '{arg}'. Use números separados por espaço."
+            if len(numeros) < 6:
+                return (
+                    "Uso: /trava_registrar TICKER DIRECAO STRIKE_COMPRA PREMIO_COMPRA "
+                    "STRIKE_VENDA PREMIO_VENDA STOP_PREMIO ALVO_PREMIO [VENCIMENTO]\n"
+                    "Exemplo: /trava_registrar CMIG4 compra 10.86 0.22 11.56 0.09 0.065 0.45 2026-10-16\n"
+                    "Os valores STOP e ALVO são no PRÊMIO da trava (R$ por contrato)."
+                )
+
+            strike_comp, premio_comp, strike_vend, premio_vend = numeros[0], numeros[1], numeros[2], numeros[3]
+            stop_premio = numeros[4]
+            alvo_premio = numeros[5]
             trava = adicionar_trava(
                 ticker, tipo, strike_comp, premio_comp, strike_vend, premio_vend,
                 stop_premio, alvo_premio, vencimento=vencimento,

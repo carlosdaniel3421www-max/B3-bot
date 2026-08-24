@@ -132,3 +132,29 @@ def test_trava_registrar_erro():
             "/trava_registrar CMIG4 compra 10.86 0.22 11.56 0.09 0.065 0.45",
         )
         assert "Stop" in resposta
+
+
+def test_trava_registrar_com_vencimento():
+    with patch("telegram_bot.adicionar_trava") as mock_add:
+        mock_add.return_value = {
+            "ticker": "CMIG4", "direcao": "compra",
+            "strike_comprado": 10.86, "strike_vendido": 11.56,
+            "premio_comprado": 0.22, "premio_vendido": 0.09,
+            "preco_entrada": 0.13, "stop": 0.065, "alvo": 0.45,
+        }
+        resposta = processar_comando(
+            "fake", 1,
+            "/trava_registrar CMIG4 compra 10.86 0.22 11.56 0.09 0.065 0.45 2026-10-16",
+        )
+        assert "TRAVA registrada" in resposta
+        # Verifica que o vencimento foi passado corretamente
+        args_chamada = mock_add.call_args
+        assert args_chamada.kwargs.get("vencimento") == "2026-10-16"
+
+
+def test_trava_registrar_valor_invalido():
+    resposta = processar_comando(
+        "fake", 1,
+        "/trava_registrar CMIG4 compra 10.86 abc 11.56 0.09 0.065 0.45",
+    )
+    assert "Valor inválido" in resposta
