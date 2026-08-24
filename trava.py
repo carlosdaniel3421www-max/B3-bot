@@ -170,6 +170,10 @@ def montar_trava(preco_atual: float, direcao: str,
     vol_impl_vendido = None
     delta_comprado = None
     delta_vendido = None
+    negocios_comprado = None
+    negocios_vendido = None
+    volume_comprado = None
+    volume_vendido = None
 
     # Tenta usar dados reais da cadeia se disponível
     fonte = "estimativa"
@@ -209,6 +213,8 @@ def montar_trava(preco_atual: float, direcao: str,
                     sufixo_comprado = lado[melhor_strike].get("sufixo") or ""
                     vol_impl_comprado = lado[melhor_strike].get("vol_impl")
                     delta_comprado = lado[melhor_strike].get("delta")
+                    negocios_comprado = lado[melhor_strike].get("negocios")
+                    volume_comprado = lado[melhor_strike].get("volume")
                     fonte = "real"
 
                     # Perna vendida: próximo strike com prêmio ~premio_alvo_perna2
@@ -230,6 +236,8 @@ def montar_trava(preco_atual: float, direcao: str,
                         sufixo_vendido = lado[strike_vendido].get("sufixo") or ""
                         vol_impl_vendido = lado[strike_vendido].get("vol_impl")
                         delta_vendido = lado[strike_vendido].get("delta")
+                        negocios_vendido = lado[strike_vendido].get("negocios")
+                        volume_vendido = lado[strike_vendido].get("volume")
                     else:
                         # Fallback: strike mais distante com liquidez
                         strikes_ordenados = sorted(
@@ -239,6 +247,8 @@ def montar_trava(preco_atual: float, direcao: str,
                             strike_vendido = strikes_ordenados[-1] if direcao == "compra" else strikes_ordenados[0]
                             premio_vendido = round(lado[strike_vendido]["preco"], 2)
                             sufixo_vendido = lado[strike_vendido].get("sufixo") or ""
+                            negocios_vendido = lado[strike_vendido].get("negocios")
+                            volume_vendido = lado[strike_vendido].get("volume")
                         else:
                             strike_vendido = None
                 else:
@@ -325,6 +335,10 @@ def montar_trava(preco_atual: float, direcao: str,
         "vol_impl_vendido": vol_impl_vendido,
         "delta_comprado": delta_comprado,
         "delta_vendido": delta_vendido,
+        "negocios_comprado": negocios_comprado,
+        "negocios_vendido": negocios_vendido,
+        "volume_comprado": volume_comprado,
+        "volume_vendido": volume_vendido,
         "stop_premio_por_contrato": stop_premio_por_contrato,
         "stop_premio_total": stop_premio_total,
         "lucro_alvo_total": lucro_alvo_total,
@@ -405,6 +419,19 @@ def formatar_trava(trava: dict, preco_atual: float) -> str:
     d2 = trava.get("delta_vendido")
     if d1 is not None:
         extras.append(f"  🎯 Delta: {d1:.2f} / {d2:.2f}" if d2 is not None else f"  🎯 Delta: {d1:.2f}")
+    # Liquidez real (negócios e volume do último pregão) — mostra que os
+    # strikes SÃO negociados, desmentindo possível alegação de "sem liquidez"
+    n1 = trava.get("negocios_comprado")
+    n2 = trava.get("negocios_vendido")
+    v1 = trava.get("volume_comprado")
+    v2 = trava.get("volume_vendido")
+    if n1 is not None:
+        extras.append(
+            f"  💧 Liquidez: {n1:.0f} neg. / {v1:.0f} vol (compra) · "
+            f"{n2:.0f} neg. / {v2:.0f} vol (venda)"
+            if n2 is not None else
+            f"  💧 Liquidez: {n1:.0f} neg. / {v1:.0f} vol"
+        )
     return "\n".join(linhas + extras)
 
 
