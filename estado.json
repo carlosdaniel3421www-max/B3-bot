@@ -4,86 +4,97 @@
     "direcao": "venda",
     "data_primeiro_alerta": "2026-08-12",
     "score_history": [
+      6,
       6
     ],
-    "ultima_data_score": "2026-08-23"
+    "ultima_data_score": "2026-08-24"
   },
   "PRIO3": {
     "score": 7,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-18",
     "score_history": [
+      7,
       7
     ],
-    "ultima_data_score": "2026-08-23"
+    "ultima_data_score": "2026-08-24"
   },
   "BBDC4": {
     "score": 7,
     "direcao": "venda",
     "data_primeiro_alerta": "2026-08-19",
     "score_history": [
+      5,
       5
     ],
-    "ultima_data_score": "2026-08-23"
+    "ultima_data_score": "2026-08-24"
   },
   "CMIG4": {
     "score": 8,
     "direcao": "venda",
     "data_primeiro_alerta": "2026-08-20",
     "score_history": [
+      8,
       8
     ],
-    "ultima_data_score": "2026-08-23"
+    "ultima_data_score": "2026-08-24"
   },
   "BBAS3": {
     "score": 7,
     "direcao": "venda",
     "data_primeiro_alerta": "2026-08-20",
     "score_history": [
+      5,
       5
     ],
-    "ultima_data_score": "2026-08-23"
+    "ultima_data_score": "2026-08-24"
   },
   "PETR4": {
     "score": 7,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-20",
     "score_history": [
+      7,
       7
     ],
-    "ultima_data_score": "2026-08-23"
+    "ultima_data_score": "2026-08-24"
   },
   "SUZB3": {
     "score": 7,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-20",
     "score_history": [
+      7,
       7
     ],
-    "ultima_data_score": "2026-08-23"
+    "ultima_data_score": "2026-08-24"
   },
   "GGBR4": {
     "score_history": [
+      5,
       5
     ],
-    "ultima_data_score": "2026-08-23"
+    "ultima_data_score": "2026-08-24"
   },
   "RAIL3": {
     "score_history": [
+      5,
       5
     ],
-    "ultima_data_score": "2026-08-23"
+    "ultima_data_score": "2026-08-24"
   },
   "ITUB4": {
     "score_history": [
+      4,
       4
     ],
-    "ultima_data_score": "2026-08-23"
+    "ultima_data_score": "2026-08-24"
   },
   "WEGE3": {
     "score_history": [
+      4,
       4
     ],
-    "ultima_data_score": "2026-08-23"
+    "ultima_data_score": "2026-08-24"
   }
 }
