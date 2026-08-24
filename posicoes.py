@@ -41,6 +41,8 @@ import os
 import sys
 from datetime import date, datetime
 
+import requests
+
 CAMINHO_POSICOES = "posicoes.json"
 CAMINHO_PROPOSTAS = "propostas.json"
 DIAS_UTEIS_POR_SEMANA = 5.0
@@ -67,6 +69,54 @@ def carregar_posicoes() -> dict:
 def salvar_posicoes(posicoes: dict):
     with open(CAMINHO_POSICOES, "w", encoding="utf-8") as f:
         json.dump(posicoes, f, ensure_ascii=False, indent=2)
+    # Sincroniza com o GitHub para persistir além do disco efêmero do Render
+    _sincronizar_github(CAMINHO_POSICOES)
+
+
+REPO_GITHUB = "carlosdaniel3421www-max/B3-bot"
+BRANCH_GITHUB = "main"
+
+
+def _sincronizar_github(arquivo: str):
+    """
+    Faz commit do arquivo (ex: posicoes.json) no GitHub via API de Contents.
+    Usa o GITHUB_TOKEN. Assim as posições persistem mesmo quando o Render
+    reinicia (disco efêmero). Falha silenciosa se token ausente.
+    """
+    import base64
+    import requests
+
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        return False
+
+    nome_arquivo = os.path.basename(arquivo)
+    with open(arquivo, "r", encoding="utf-8") as f:
+        conteudo = f.read()
+
+    # Busca o SHA atual do arquivo (necessário para atualizar)
+    url_arquivo = f"https://api.github.com/repos/{REPO_GITHUB}/contents/{nome_arquivo}"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
+
+    try:
+        resp = requests.get(url_arquivo, headers=headers, timeout=15)
+        sha = None
+        if resp.status_code == 200:
+            sha = resp.json().get("sha")
+
+        payload = {
+            "message": f"Atualiza {nome_arquivo} [skip ci]",
+            "content": base64.b64encode(conteudo.encode("utf-8")).decode("utf-8"),
+            "branch": BRANCH_GITHUB,
+        }
+        if sha:
+            payload["sha"] = sha
+
+        resp = requests.put(url_arquivo, json=payload, headers=headers, timeout=15)
+        return resp.status_code in (200, 201)
+    except Exception as e:
+        logging.warning("Falha ao sincronizar %s no GitHub: %s", arquivo, e)
+        return False
 
 
 # ---------------------------------------------------------------------------
