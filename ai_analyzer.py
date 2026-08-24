@@ -53,7 +53,6 @@ class AIAnalyzer:
     # um modelo). Mantém o robô funcionando mesmo se o nome do modelo
     # configurado parar de existir de um dia pro outro.
     MODELOS_FALLBACK = (
-        "gemini-3.5-flash-lite",
         "gemini-flash-lite-latest",
         "gemini-2.0-flash-lite",
     )
@@ -1079,6 +1078,23 @@ Dados do robô:
                 exc_info=True,
             )
             return None
+
+
+    def analisar_prompt(self, prompt: str, chart_path: Optional[str | Path] = None) -> tuple:
+        """
+        Método PÚBLICO para análises livres (ex: /analisar_posicoes).
+        Tenta Nemotron primeiro; se falhar, cai pro Gemini.
+        Retorna (resposta_json, provedor) ou (None, "").
+        """
+        resposta = self._call_nemotron(prompt, chart_path=chart_path)
+        if resposta:
+            return resposta, "Nemotron"
+        resposta_g = self._call_gemini(
+            self._get_client(), prompt, chart_path, modelo=self.model,
+        )
+        if resposta_g:
+            return resposta_g, "Gemini"
+        return None, ""
 
 
     def _extract_json(

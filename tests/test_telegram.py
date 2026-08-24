@@ -38,13 +38,13 @@ def test_analisar_posicoes_com_ia():
     }
     # Mock analisador
     analisador_mock = type("Analisador", (), {
-        "_call_nemotron": lambda self, p: {"analises": [
-            {"ticker": "LREN3", "acao": "manter", "explicacao": "dentro do plano",
-             "risco": "liquidez"},
-        ]},
-        "_call_gemini": lambda self, c, p, i, modelo=None: None,
-        "_get_client": lambda self: None,
-        "model": "x",
+        "analisar_prompt": lambda self, p, chart_path=None: (
+            {"analises": [
+                {"ticker": "LREN3", "acao": "manter", "explicacao": "dentro do plano",
+                 "risco": "liquidez"},
+            ]},
+            "Nemotron",
+        ),
     })()
     with patch("telegram_bot.carregar_posicoes", return_value=posicoes):
         with patch("telegram_bot._precos_posicoes", return_value={"LREN3": 10.83}):

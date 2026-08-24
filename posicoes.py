@@ -301,6 +301,9 @@ def formatar_gestao_trava(trava: dict, preco_atual_premio: float) -> str:
     linhas = [f"{emoji} <b>{trava['ticker']}</b> — TRAVA ({trava.get('strike_comprado','?')}/{trava.get('strike_vendido','?')})"]
 
     linhas.append(f"  💰 Débito por contrato: R$ {custo:.2f}")
+    qtd = trava.get("quantidade", 0)
+    if qtd:
+        linhas.append(f"  📦 Contratos: {qtd} | Custo total: R$ {custo * qtd:.2f}")
     linhas.append(f"  🛑 Stop no prêmio: R$ {stop:.2f} | 🎯 Alvo no prêmio: R$ {alvo:.2f}")
 
     if preco_atual_premio:
@@ -411,6 +414,8 @@ def gerar_gestao_posicao(posicao: dict, preco_atual: float) -> dict:
         "pct_no_caminho": round(pct_no_caminho * 100, 0),
         "dias_uteis": dias_uteis,
         "prazo_maximo_dias": prazo_max,
+        "quantidade": posicao.get("quantidade", 0),
+        "valor_total": round(preco_atual * posicao.get("quantidade", 0), 2),
     }
 
 
@@ -422,6 +427,8 @@ def formatar_gestao(gestao: dict) -> str:
         f"  Preço atual: R$ {p['preco_atual']:.2f} | Entrada: R$ {p['preco_entrada']:.2f} | Lucro: {p['lucro_pct']:+.2f}%",
         f"  Stop: R$ {p['stop']:.2f} · Alvo: R$ {p['alvo']:.2f} | {p['pct_no_caminho']:.0f}% do caminho | {p['dias_uteis']}/{p['prazo_maximo_dias']} dias úteis",
     ]
+    if p.get("quantidade"):
+        linhas.append(f"  📦 Quantidade: {p['quantidade']} | Valor total: R$ {p['valor_total']:.2f}")
     for inst in p["instrucoes"]:
         linhas.append(f"  • {inst}")
     return "\n".join(linhas)

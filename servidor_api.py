@@ -60,9 +60,19 @@ def _baixar_estado_do_github():
             if resp.status_code == 200:
                 import base64
                 conteudo = base64.b64decode(resp.json().get("content", "")).decode("utf-8")
+                # Só restaura se o conteúdo baixado for um JSON válido não-vazio.
+                # Evita sobrescrever o estado local com um arquivo vazio/corrompido
+                # se o GitHub ainda não tiver processado o commit mais recente.
+                import json as _json
+                dados = _json.loads(conteudo)
+                if dados is None:
+                    logger.warning("Ignorando %s: conteúdo vazio no GitHub", arquivo)
+                    continue
                 with open(arquivo, "w", encoding="utf-8") as f:
                     f.write(conteudo)
                 logger.info("Estado restaurado do GitHub: %s", arquivo)
+            elif resp.status_code == 404:
+                logger.info("Arquivo %s ainda não existe no GitHub — estado local mantido", arquivo)
         except Exception as e:
             logger.warning("Falha ao baixar %s do GitHub: %s", arquivo, e)
 

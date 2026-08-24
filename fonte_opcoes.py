@@ -19,6 +19,7 @@ IMPORTANTE:
 
 import logging
 import time
+import threading
 
 import requests
 
@@ -31,6 +32,7 @@ TIMEOUT = 20
 # Dado de "último pregão" não muda dentro do dia — evita re-buscar a cadeia
 # inteira a cada chamada no mesmo dia.
 _cache_cadeia = {}
+_cache_lock = threading.Lock()
 
 
 def _chave_dia(ticker: str) -> str:
@@ -117,17 +119,20 @@ def buscar_cadeia_opcoesnet(ticker: str, usar_cache: bool = True) -> dict | None
     Com cache por dia (dado de último pregão não muda no mesmo dia).
     """
     chave = _chave_dia(ticker)
-    if usar_cache and chave in _cache_cadeia:
-        return _cache_cadeia[chave]
+    with _cache_lock:
+        if usar_cache and chave in _cache_cadeia:
+            return _cache_cadeia[chave]
     cadeia = _buscar_cadeia_opcoesnet_sem_cache(ticker)
     if cadeia:
-        _cache_cadeia[chave] = cadeia
+        with _cache_lock:
+            _cache_cadeia[chave] = cadeia
     return cadeia
 
 
 def limpar_cache_cadeia():
     """Limpa o cache de cadeias (útil em testes)."""
-    _cache_cadeia.clear()
+    with _cache_lock:
+        _cache_cadeia.clear()
 
 
 def _serie_para_opcao(serie: list, columns: list) -> dict:

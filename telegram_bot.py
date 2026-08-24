@@ -402,13 +402,7 @@ def _analisar_posicoes_ia() -> str:
         return "❌ IA não configurada. Adicione GEMINI_API_KEY."
 
     try:
-        resposta = analisador._call_nemotron(prompt)
-        provedor = "Nemotron"
-        if not resposta:
-            resposta = analisador._call_gemini(
-                analisador._get_client(), prompt, None, modelo=analisador.model,
-            )
-            provedor = "Gemini"
+        resposta, provedor = analisador.analisar_prompt(prompt)
     except Exception as e:
         logging.warning("Falha na IA ao analisar posições: %s", e)
         return f"⚠️ Erro ao analisar posições: {str(e)[:200]}"

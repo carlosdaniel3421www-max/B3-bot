@@ -22,6 +22,8 @@ IMPORTANTE: sem OpLab conectada, o prêmio é ESTIMATIVA teórica
 import logging
 import math
 
+from math import erf, sqrt
+
 logger = logging.getLogger(__name__)
 
 # Teto de gasto total padrão do usuário (100 contratos)
@@ -42,7 +44,6 @@ def _premio_bs_europeu(S, K, T, r, sigma, tipo):
         return 0.0
     d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
     d2 = d1 - sigma * math.sqrt(T)
-    from math import erf, sqrt
 
     def _n(x):
         return 0.5 * (1 + erf(x / sqrt(2)))
