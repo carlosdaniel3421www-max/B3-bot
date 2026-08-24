@@ -1,12 +1,11 @@
 name: Bot Telegram (comandos)
 
-# Roda a cada 5 minutos pra ler seus comandos no chat do Telegram
-# (/registrar TICKER, /remover TICKER, /posicoes...) e registrar/gerenciar
-# suas posições automaticamente.
+# DESATIVADO: os comandos agora são processados pelo servidor Render (webhook,
+# resposta instantânea). Este workflow era o polling antigo a cada 5 min, que
+# conflitava com o Render e causava respostas duplicadas/estado divergente.
+# Manter como fallback manual apenas.
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
