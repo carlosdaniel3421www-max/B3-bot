@@ -435,11 +435,9 @@ def formatar_gestao_todas(posicoes: dict, precos: dict) -> str:
     blocos = []
     for ticker, posicao in posicoes.items():
         preco = precos.get(ticker)
-        # Se for trava, formata com a gestão de trava.
-        # O preço da AÇÃO não é o prêmio da opção — passa None (sem comparação
-        # automática; o usuário confere o prêmio real no home broker).
         if posicao.get("tipo_operacao") == "trava":
-            blocos.append(formatar_gestao_trava(posicao, None))
+            premio_trava = _buscar_premio_trava(ticker, posicao)
+            blocos.append(formatar_gestao_trava(posicao, premio_trava))
             continue
         if preco is None or preco <= 0:
             blocos.append(f"⚪ <b>{ticker}</b> — preço atual indisponível para gestão")
@@ -450,6 +448,33 @@ def formatar_gestao_todas(posicoes: dict, precos: dict) -> str:
         return ""
 
     return "📋 <b>GESTÃO DE POSIÇÕES ABERTAS</b>\n" + "\n\n".join(blocos)
+
+
+def _buscar_premio_trava(ticker: str, trava: dict) -> float | None:
+    """
+    Busca o prêmio atual REAL da perna comprada da trava via opcoes.net.br.
+    Retorna None se não conseguir (gestão mostra apenas o custo, sem comparação).
+    """
+    try:
+        from fonte_opcoes import buscar_cadeia_estruturada, buscar_melhor_vencimento
+        strike_comprado = trava.get("strike_comprado")
+        if not strike_comprado:
+            return None
+        tipo_opcao = "call" if trava.get("direcao") == "compra" else "put"
+        cadeia = buscar_cadeia_estruturada(ticker)
+        if not cadeia:
+            return None
+        venc = buscar_melhor_vencimento(cadeia)
+        if not venc:
+            return None
+        lado = venc.get("calls" if tipo_opcao == "call" else "puts", {})
+        info = lado.get(strike_comprado)
+        if info and info.get("preco") is not None:
+            return float(info["preco"])
+        return None
+    except Exception as e:
+        logging.warning("Falha ao buscar prêmio real da trava %s: %s", ticker, e)
+        return None
 
 
 def main():

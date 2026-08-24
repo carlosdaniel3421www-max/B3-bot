@@ -243,3 +243,79 @@ def test_webhook_erro_processamento_nao_fica_silencioso():
                     mock_responder.assert_called_once()
                     texto = mock_responder.call_args[0][1]
                     assert "Erro interno" in texto
+
+
+def test_gestao_trava_sem_premio_real():
+    from posicoes import formatar_gestao_trava
+    trava = {
+        "ticker": "LREN3", "direcao": "compra", "tipo_operacao": "trava",
+        "strike_comprado": 10.86, "strike_vendido": 11.56,
+        "preco_entrada": 0.13, "stop": 0.07, "alvo": 0.45,
+        "vencimento": "2026-10-16",
+    }
+    saida = formatar_gestao_trava(trava, None)
+    assert "Débito por contrato" in saida
+    assert "Stop no prêmio" in saida
+    assert "Vencimento" in saida
+
+
+def test_gestao_trava_com_premio_real():
+    from posicoes import formatar_gestao_trava
+    trava = {
+        "ticker": "LREN3", "direcao": "compra", "tipo_operacao": "trava",
+        "strike_comprado": 10.86, "strike_vendido": 11.56,
+        "preco_entrada": 0.13, "stop": 0.07, "alvo": 0.45,
+        "vencimento": "2026-10-16",
+    }
+    saida = formatar_gestao_trava(trava, 0.19)
+    assert "+46" in saida or "lucro" in saida.lower()
+    assert "Prêmio atual" in saida
+
+
+def test_gestao_trava_stop_atingido():
+    from posicoes import formatar_gestao_trava
+    trava = {
+        "ticker": "LREN3", "direcao": "compra", "tipo_operacao": "trava",
+        "strike_comprado": 10.86, "strike_vendido": 11.56,
+        "preco_entrada": 0.13, "stop": 0.07, "alvo": 0.45,
+    }
+    saida = formatar_gestao_trava(trava, 0.05)
+    assert "STOP no prêmio atingido" in saida
+
+
+def test_gestao_trava_alvo_atingido():
+    from posicoes import formatar_gestao_trava
+    trava = {
+        "ticker": "LREN3", "direcao": "compra", "tipo_operacao": "trava",
+        "strike_comprado": 10.86, "strike_vendido": 11.56,
+        "preco_entrada": 0.13, "stop": 0.07, "alvo": 0.45,
+    }
+    saida = formatar_gestao_trava(trava, 0.50)
+    assert "ALVO atingido" in saida
+
+
+def test_buscar_premio_trava_com_cadeia_real():
+    from posicoes import _buscar_premio_trava
+    from unittest.mock import patch
+    trava = {
+        "ticker": "LREN3", "direcao": "compra", "tipo_operacao": "trava",
+        "strike_comprado": 10.86, "strike_vendido": 11.56,
+    }
+    cadeia_fake = {
+        "preco_base": 10.82,
+        "expirations": [{
+            "dt": "2026-10-16", "du": 35, "mensal": True,
+            "calls": {10.86: {"preco": 0.19, "negocios": 50}},
+            "puts": {},
+        }],
+    }
+    with patch("fonte_opcoes.buscar_cadeia_estruturada", return_value=cadeia_fake):
+        assert _buscar_premio_trava("LREN3", trava) == 0.19
+
+
+def test_buscar_premio_trava_cadeia_falha():
+    from posicoes import _buscar_premio_trava
+    from unittest.mock import patch
+    trava = {"ticker": "LREN3", "direcao": "compra", "strike_comprado": 10.86}
+    with patch("fonte_opcoes.buscar_cadeia_estruturada", return_value=None):
+        assert _buscar_premio_trava("LREN3", trava) is None
