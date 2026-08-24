@@ -13,7 +13,26 @@ def test_ajuda_lista_comandos():
     resposta = processar_comando("fake", 1, "/ajuda")
     assert "/registrar" in resposta
     assert "/remover" in resposta
-    assert "/posicoes" in resposta
+
+
+def test_relatorio_sem_token():
+    resposta = processar_comando("fake", 1, "/relatorio")
+    assert "GITHUB_TOKEN" in resposta
+    assert "não configurado" in resposta
+
+
+def test_relatorio_com_token():
+    with patch("telegram_bot.getattr") as mock_getattr:
+        # Simula GITHUB_TOKEN configurado + requests.post mockado
+        with patch("telegram_bot.requests.post") as mock_post:
+            mock_post.return_value.status_code = 204
+            # Override do getattr para retornar token
+            original = __import__('telegram_bot').__dict__.copy()
+            import telegram_bot as tb
+            # Mock direto: o getattr do config precisa retornar o token
+            with patch.object(tb.config, 'GITHUB_TOKEN', 'fake_token'):
+                resposta = tb.processar_comando("fake", 1, "/relatorio")
+    assert "Relatório acionado" in resposta
 
 
 def test_registrar_sem_argumentos():

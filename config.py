@@ -14,6 +14,11 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "COLOQUE_SEU_CHAT_ID_AQUI"
 # --- OpLab (opcional, para cadeia de opções real) ---
 OPLAB_TOKEN = os.environ.get("OPLAB_TOKEN", "")  # deixe vazio se não tiver
 
+# --- GitHub (para acionar o relatório via /relatorio no Telegram) ---
+# Crie em: Settings -> Developer settings -> Personal access tokens -> Fine-grained tokens
+# Permissão necessária: Actions: Write (no repositório B3-bot)
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+
 # --- IA visual (Google Gemini) para revisar os sinais olhando o gráfico ---
 # Plano GRATUITO (sem prazo de validade): aistudio.google.com -> Get API Key
 # Sem chave configurada, o robô usa só o placar técnico (não quebra nada).

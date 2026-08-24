@@ -214,9 +214,13 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
             logging.warning("Erro ao calcular trava manual: %s", e)
             return f"⚠️ Erro ao calcular: {str(e)[:200]}"
 
+    if comando in ("/relatorio", "/report", "/diario"):
+        return _acionar_relatorio_github()
+
     if comando in ("/help", "/ajuda", "/start", "/comandos"):
         return (
             "🤖 <b>Comandos do robô:</b>\n"
+            "  /relatorio — dispara o relatório diário completo (gráficos + IA + travas)\n"
             "  /registrar TICKER — registra a posição que o robô propôs\n"
             "  /registrar TICKER DIRECAO PRECO STOP ALVO — registra QUALQUER\n"
             "    operação sua (ex: /registrar PETR4 compra 43.11 40.50 48.22)\n"
@@ -231,6 +235,43 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
         )
 
     return None
+
+
+def _acionar_relatorio_github() -> str:
+    """
+    Dispara o workflow do relatório diário no GitHub Actions via API.
+    O relatório roda lá (grátis, robusto) e envia o resultado pro Telegram.
+    """
+    import requests
+
+    token = getattr(config, "GITHUB_TOKEN", "")
+    if not token:
+        return "❌ GITHUB_TOKEN não configurado. Crie um token no GitHub (Settings → Developer settings → Personal access tokens → Fine-grained tokens) com permissão 'Actions: Write' e adicione como secret no Render."
+
+    repo = "carlosdaniel3421www-max/B3-bot"
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/relatorio.yml/dispatches"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    payload = {"ref": "main"}
+
+    try:
+        r = requests.post(url, json=payload, headers=headers, timeout=15)
+        if r.status_code == 204:
+            return (
+                "🚀 <b>Relatório acionado!</b>\n"
+                "O relatório está sendo gerado no GitHub Actions e chegará aqui em ~2 minutos.\n"
+                "Acompanhe em: https://github.com/carlosdaniel3421www-max/B3-bot/actions"
+            )
+        elif r.status_code == 401:
+            return "❌ Token inválido ou sem permissão. Verifique o GITHUB_TOKEN no Render."
+        elif r.status_code == 404:
+            return "❌ Workflow não encontrado. Verifique se o repositório e o nome do workflow estão corretos."
+        else:
+            return f"⚠️ Erro ao disparar relatório (código {r.status_code}): {r.text[:200]}"
+    except requests.RequestException as e:
+        return f"⚠️ Erro de rede ao acionar o relatório: {e}"
 
 
 def main():
