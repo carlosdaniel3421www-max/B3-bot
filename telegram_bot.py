@@ -27,8 +27,8 @@ import config
 from diario_sinais import formatar_resumo_desempenho
 from trava import calcular_trava_manual, formatar_trava_manual
 from posicoes import (
-    adicionar_posicao, carregar_posicoes, carregar_propostas, formatar_gestao_todas,
-    gerar_gestao_posicao, remover_posicao, registrar_da_proposta,
+    adicionar_posicao, adicionar_trava, carregar_posicoes, carregar_propostas,
+    formatar_gestao_todas, gerar_gestao_posicao, remover_posicao, registrar_da_proposta,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -217,6 +217,42 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
     if comando in ("/relatorio", "/report", "/diario"):
         return _acionar_relatorio_github()
 
+    if comando in ("/trava_registrar", "/registrar_trava", "/tr"):
+        # /trava_registrar TICKER compra STRIKE_C PREMIO_C STRIKE_V PREMIO_V STOP ALVO [VENC]
+        if len(args) < 8:
+            return (
+                "Uso: /trava_registrar TICKER DIRECAO STRIKE_COMPRA PREMIO_COMPRA "
+                "STRIKE_VENDA PREMIO_VENDA STOP_PREMIO ALVO_PREMIO [VENCIMENTO]\n"
+                "Exemplo: /trava_registrar CMIG4 compra 10.86 0.22 11.56 0.09 0.065 0.45 2026-10-16\n"
+                "Os valores STOP e ALVO são no PRÊMIO da trava (R$ por contrato)."
+            )
+        try:
+            ticker = args[0].upper()
+            tipo = args[1].lower()
+            strike_comp = float(args[2])
+            premio_comp = float(args[3])
+            strike_vend = float(args[4])
+            premio_vend = float(args[5])
+            stop_premio = float(args[6])
+            alvo_premio = float(args[7])
+            vencimento = args[8] if len(args) > 8 else ""
+            trava = adicionar_trava(
+                ticker, tipo, strike_comp, premio_comp, strike_vend, premio_vend,
+                stop_premio, alvo_premio, vencimento=vencimento,
+            )
+            return (
+                f"🔒 <b>{ticker}</b> — TRAVA registrada!\n"
+                f"  Comprar {trava['strike_comprado']:.2f} @ R$ {trava['premio_comprado']:.2f}\n"
+                f"  Vender {trava['strike_vendido']:.2f} @ R$ {trava['premio_vendido']:.2f}\n"
+                f"  💰 Débito: R$ {trava['preco_entrada']:.2f} · Stop: R$ {trava['stop']:.2f} · Alvo: R$ {trava['alvo']:.2f}\n"
+                f"  Agora acompanho essa trava todo dia."
+            )
+        except ValueError as e:
+            return f"⚠️ {e}"
+        except Exception as e:
+            logging.warning("Erro ao registrar trava: %s", e)
+            return f"⚠️ Erro ao registrar trava: {str(e)[:200]}"
+
     if comando in ("/help", "/ajuda", "/start", "/comandos"):
         return (
             "🤖 <b>Comandos do robô:</b>\n"
@@ -231,7 +267,10 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
             "  /sinais — taxa de acerto dos sinais que o robô já emitiu\n"
             "  /trava DIRECAO STRIKE1 PREMIO1 STRIKE2 PREMIO2 — verifica se a\n"
             "    trava compensa com os PREÇOS ATUAIS do home broker\n"
-            "    (ex: /trava compra 10.86 0.22 11.56 0.09)"
+            "    (ex: /trava compra 10.86 0.22 11.56 0.09)\n"
+            "  /trava_registrar TICKER DIRECAO SC PC SV PV STOP ALVO [VENC] — registra\n"
+            "    a trava que você montou (para acompanhar todo dia)\n"
+            "    (ex: /trava_registrar CMIG4 compra 10.86 0.22 11.56 0.09 0.065 0.45)"
         )
 
     return None

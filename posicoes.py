@@ -186,6 +186,84 @@ def adicionar_posicao(ticker: str, direcao: str, preco_entrada: float,
     return posicao
 
 
+def adicionar_trava(ticker: str, tipo: str, strike_comprado: float, premio_comprado: float,
+                    strike_vendido: float, premio_vendido: float,
+                    stop_premio: float, alvo_premio: float,
+                    quantidade: int = 100, vencimento: str = "") -> dict:
+    """
+    Registra uma TRAVA montada (Bull/Bear Spread) como posição aberta.
+    O "preco_entrada" é o custo líquido por contrato (débito).
+    O "stop" e "alvo" são valores no PRÊMIO da trava (em R$ por contrato).
+    """
+    ticker = ticker.upper()
+    tipo = tipo.lower()
+    if tipo not in ("compra", "venda"):
+        raise ValueError("tipo deve ser 'compra' ou 'venda'")
+
+    custo_liquido = round(premio_comprado - premio_vendido, 2)
+    if custo_liquido <= 0:
+        raise ValueError("Custo líquido da trava deve ser maior que zero")
+
+    if stop_premio >= custo_liquido:
+        raise ValueError("Stop no prêmio deve ser MENOR que o custo da trava")
+    if alvo_premio <= custo_liquido:
+        raise ValueError("Alvo no prêmio deve ser MAIOR que o custo da trava")
+
+    posicoes = carregar_posicoes()
+    posicao = {
+        "ticker": ticker,
+        "direcao": tipo,
+        "tipo_operacao": "trava",
+        "strike_comprado": round(strike_comprado, 2),
+        "strike_vendido": round(strike_vendido, 2),
+        "premio_comprado": round(premio_comprado, 2),
+        "premio_vendido": round(premio_vendido, 2),
+        "preco_entrada": custo_liquido,           # débito por contrato
+        "stop": round(stop_premio, 2),            # stop no PRÊMIO
+        "alvo": round(alvo_premio, 2),            # alvo no PRÊMIO
+        "quantidade": quantidade,
+        "vencimento": vencimento,
+        "data_entrada": date.today().isoformat(),
+        "prazo_maximo_dias": 20,
+    }
+    posicoes[ticker] = posicao
+    salvar_posicoes(posicoes)
+    return posicao
+
+
+def formatar_gestao_trava(trava: dict, preco_atual_premio: float) -> str:
+    """
+    Formata a gestão de uma TRAVA registrada, comparando o prêmio atual da
+    perna comprada com o custo da trava (débito). Mostra lucro/stop no prêmio.
+    """
+    custo = trava.get("preco_entrada", 0)
+    stop = trava.get("stop", 0)
+    alvo = trava.get("alvo", 0)
+    direcao = trava.get("direcao", "compra")
+
+    emoji = "🟢" if direcao == "compra" else "🔴"
+    linhas = [f"{emoji} <b>{trava['ticker']}</b> — TRAVA ({trava.get('strike_comprado','?')}/{trava.get('strike_vendido','?')})"]
+
+    linhas.append(f"  💰 Débito por contrato: R$ {custo:.2f}")
+    linhas.append(f"  🛑 Stop no prêmio: R$ {stop:.2f} | 🎯 Alvo no prêmio: R$ {alvo:.2f}")
+
+    if preco_atual_premio:
+        lucro_pct = (preco_atual_premio - custo) / custo * 100 if custo else 0
+        linhas.append(f"  📊 Prêmio atual da perna comprada: R$ {preco_atual_premio:.2f} ({lucro_pct:+.1f}%)")
+        if preco_atual_premio <= stop:
+            linhas.append("  ⚠️ <b>STOP no prêmio atingido — considere fechar!</b>")
+        elif preco_atual_premio >= alvo:
+            linhas.append("  ✅ <b>ALVO atingido — feche a trava e realize o lucro!</b>")
+        elif preco_atual_premio > custo:
+            linhas.append("  ✅ Trava no lucro. Pode segurar ou fechar parcial.")
+
+    venc = trava.get("vencimento")
+    if venc:
+        linhas.append(f"  📅 Vencimento: {venc}")
+
+    return "\n".join(linhas)
+
+
 def remover_posicao(ticker: str) -> bool:
     posicoes = carregar_posicoes()
     if ticker.upper() in posicoes:
@@ -301,6 +379,12 @@ def formatar_gestao_todas(posicoes: dict, precos: dict) -> str:
     blocos = []
     for ticker, posicao in posicoes.items():
         preco = precos.get(ticker)
+        # Se for trava, formata com a gestão de trava.
+        # O preço da AÇÃO não é o prêmio da opção — passa None (sem comparação
+        # automática; o usuário confere o prêmio real no home broker).
+        if posicao.get("tipo_operacao") == "trava":
+            blocos.append(formatar_gestao_trava(posicao, None))
+            continue
         if preco is None or preco <= 0:
             blocos.append(f"⚪ <b>{ticker}</b> — preço atual indisponível para gestão")
             continue

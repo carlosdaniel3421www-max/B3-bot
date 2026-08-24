@@ -289,6 +289,16 @@ def montar_trava(preco_atual: float, direcao: str,
 
     dentro_orcamento = custo_total <= gasto_maximo
 
+    # --- Plano de saída ---
+    # Stop no prêmio: se a trava perder 50% do valor, sai (perda máxima recomendada)
+    stop_premio_por_contrato = round(custo_liquido * 0.5, 2)
+    stop_premio_total = round(stop_premio_por_contrato * contratos, 2)
+    # Alvo: quando o ativo chegar perto do strike comprado, a trava valoriza forte
+    # Lucro sugerido = 50% do ganho máximo (fechamento parcial conservador)
+    lucro_alvo_total = round(ganho_max * 0.5, 2)
+    # Tempo máximo: sair até 15 dias úteis antes do vencimento (theta acelera)
+    dias_max_holding = max(dias_venc - 15, 5)
+
     return {
         "nome": nome,
         "direcao": direcao,
@@ -315,6 +325,10 @@ def montar_trava(preco_atual: float, direcao: str,
         "vol_impl_vendido": vol_impl_vendido,
         "delta_comprado": delta_comprado,
         "delta_vendido": delta_vendido,
+        "stop_premio_por_contrato": stop_premio_por_contrato,
+        "stop_premio_total": stop_premio_total,
+        "lucro_alvo_total": lucro_alvo_total,
+        "dias_max_holding": dias_max_holding,
         "fonte": fonte,
         "observacao": (
             "Prêmios reais do último pregão (opcoes.net.br). Confirme a "
@@ -361,10 +375,26 @@ def formatar_trava(trava: dict, preco_atual: float) -> str:
         f"  🛑 Risco máx: R$ {trava['risco_maximo']:.2f} | "
         f"🎯 Ganho máx: R$ {trava['ganho_maximo']:.2f}",
         f"  ⚖️ Breakeven: R$ {trava['breakeven']:.2f}",
-        f"  ⏳ Saia quando o ativo chegar perto de R$ {trava['encerrar_quando']:.2f} "
-        f"(a opção OTM valoriza forte nesse ponto)",
         f"  <i>{fonte_txt}</i>",
     ]
+
+    # Plano de saída claro (o que o usuário pediu)
+    linhas.append("  📋 <b>Plano de saída:</b>")
+    lucro = trava.get("lucro_alvo_total")
+    if lucro:
+        linhas.append(f"  ✅ <b>Lucro:</b> saia quando a trava render ~R$ {lucro:.2f} (metade do ganho máx)")
+    stop = trava.get("stop_premio_total")
+    if stop:
+        linhas.append(f"  🛑 <b>Stop no prêmio:</b> se a trava cair pra R$ {stop:.2f} total, saia (perda de 50%)")
+    encerrar = trava.get("encerrar_quando")
+    if encerrar:
+        linhas.append(f"  🎯 <b>Quando o ativo chegar perto de R$ {encerrar:.2f}</b> — a opção OTM valoriza forte, encerre")
+    dias = trava.get("dias_max_holding")
+    venc = trava.get("vencimento_data")
+    if dias:
+        info_venc = f" (venc. {venc})" if venc else ""
+        linhas.append(f"  ⏳ <b>Prazo máx:</b> segure até ~{dias} dias úteis{info_venc} — depois o tempo come a trava (theta)")
+
     # Vol implícita e delta, se disponíveis (dados reais)
     extras = []
     vi1 = trava.get("vol_impl_comprado")

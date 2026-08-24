@@ -98,7 +98,7 @@ def test_formatar_trava_conteudo():
     assert "Risco máx" in texto
     assert "Ganho máx" in texto
     assert "Breakeven" in texto
-    assert "Saia quando" in texto
+    assert "Plano de saída" in texto
     assert "Vencimento" in texto
 
 

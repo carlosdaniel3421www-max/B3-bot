@@ -101,3 +101,34 @@ def test_posicoes_vazio():
         mock_pos.return_value = {}
         resposta = processar_comando("fake", 1, "/posicoes")
         assert "Nenhuma posição aberta" in resposta
+
+
+def test_trava_registrar_sem_argumentos():
+    resposta = processar_comando("fake", 1, "/trava_registrar")
+    assert "Uso:" in resposta
+
+
+def test_trava_registrar_sucesso():
+    with patch("telegram_bot.adicionar_trava") as mock_add:
+        mock_add.return_value = {
+            "ticker": "CMIG4", "direcao": "compra",
+            "strike_comprado": 10.86, "strike_vendido": 11.56,
+            "premio_comprado": 0.22, "premio_vendido": 0.09,
+            "preco_entrada": 0.13, "stop": 0.065, "alvo": 0.45,
+        }
+        resposta = processar_comando(
+            "fake", 1,
+            "/trava_registrar CMIG4 compra 10.86 0.22 11.56 0.09 0.065 0.45",
+        )
+        assert "TRAVA registrada" in resposta
+        assert "CMIG4" in resposta
+        mock_add.assert_called_once()
+
+
+def test_trava_registrar_erro():
+    with patch("telegram_bot.adicionar_trava", side_effect=ValueError("Stop deve ser MENOR")):
+        resposta = processar_comando(
+            "fake", 1,
+            "/trava_registrar CMIG4 compra 10.86 0.22 11.56 0.09 0.065 0.45",
+        )
+        assert "Stop" in resposta
