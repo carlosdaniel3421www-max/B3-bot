@@ -392,10 +392,20 @@ def rodar_analise_trava_ia(resultados: list) -> str:
         provedor = ""
         if analisador is not None:
             try:
+                venc_data = trava.get("vencimento_data") or "N/A"
+                dias_uteis = trava.get("dias_vencimento") or "N/A"
                 prompt_trava = (
                     f"Você é um especialista em opções da B3. Avalie EXCLUSIVAMENTE esta TRAVA "
-                    f"para {ticker} (preço atual R$ {preco:.2f}, direção do robô: {direcao}).\n\n"
+                    f"para {ticker}.\n\n"
+                    f"CONTEXTO (importante — não confunda a data):\n"
+                    f"- Hoje é {hoje}.\n"
+                    f"- O vencimento desta trava é {venc_data}, que fica a "
+                    f"{dias_uteis} DIAS ÚTEIS da data de hoje (cerca de 1-2 meses, "
+                    f"o próximo vencimento mensal normal da B3 — NÃO são anos).\n"
+                    f"- Preço atual do ativo: R$ {preco:.2f}. Direção do robô: {direcao}.\n\n"
                     f"{bloco_trava}\n\n"
+                    "Avalie se a trava vale a pena: custo, risco/retorno, liquidez e "
+                    "realismo do prazo (confirme que o vencimento é o próximo mensal).\n"
                     "Responda APENAS com JSON, com os campos exatos:\n"
                     '{"fazer_trava": true/false, '
                     '"nivel_certeza": "0 a 100", '
