@@ -1,23 +1,25 @@
 {
   "LREN3": {
-    "score": 6,
+    "score": 7,
     "direcao": "venda",
     "data_primeiro_alerta": "2026-08-12",
     "score_history": [
       6,
-      6
+      6,
+      8
     ],
-    "ultima_data_score": "2026-08-24"
+    "ultima_data_score": "2026-08-25"
   },
   "PRIO3": {
-    "score": 7,
+    "score": 6,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-18",
     "score_history": [
       7,
-      7
+      7,
+      3
     ],
-    "ultima_data_score": "2026-08-24"
+    "ultima_data_score": "2026-08-25"
   },
   "BBDC4": {
     "score": 7,
@@ -25,19 +27,21 @@
     "data_primeiro_alerta": "2026-08-19",
     "score_history": [
       5,
-      5
+      5,
+      3
     ],
-    "ultima_data_score": "2026-08-24"
+    "ultima_data_score": "2026-08-25"
   },
   "CMIG4": {
-    "score": 8,
+    "score": 6,
     "direcao": "venda",
     "data_primeiro_alerta": "2026-08-20",
     "score_history": [
       8,
-      8
+      8,
+      3
     ],
-    "ultima_data_score": "2026-08-24"
+    "ultima_data_score": "2026-08-25"
   },
   "BBAS3": {
     "score": 7,
@@ -45,19 +49,21 @@
     "data_primeiro_alerta": "2026-08-20",
     "score_history": [
       5,
-      5
+      5,
+      3
     ],
-    "ultima_data_score": "2026-08-24"
+    "ultima_data_score": "2026-08-25"
   },
   "PETR4": {
-    "score": 7,
+    "score": 6,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-20",
     "score_history": [
       7,
-      7
+      7,
+      3
     ],
-    "ultima_data_score": "2026-08-24"
+    "ultima_data_score": "2026-08-25"
   },
   "SUZB3": {
     "score": 7,
@@ -65,42 +71,38 @@
     "data_primeiro_alerta": "2026-08-20",
     "score_history": [
       7,
-      7
+      7,
+      6
     ],
-    "ultima_data_score": "2026-08-24"
+    "ultima_data_score": "2026-08-25"
   },
   "GGBR4": {
     "score_history": [
       5,
-      5
+      5,
+      4
     ],
-    "ultima_data_score": "2026-08-24"
+    "ultima_data_score": "2026-08-25"
   },
   "RAIL3": {
     "score_history": [
       5,
+      5,
       5
     ],
-    "ultima_data_score": "2026-08-24"
-  },
-  "ITUB4": {
-    "score_history": [
-      4,
-      4
-    ],
-    "ultima_data_score": "2026-08-24"
-  },
-  "WEGE3": {
-    "score_history": [
-      4,
-      4
-    ],
-    "ultima_data_score": "2026-08-24"
+    "ultima_data_score": "2026-08-25"
   },
   "VALE3": {
     "score_history": [
+      4,
       4
     ],
-    "ultima_data_score": "2026-08-24"
+    "ultima_data_score": "2026-08-25"
+  },
+  "B3SA3": {
+    "score_history": [
+      5
+    ],
+    "ultima_data_score": "2026-08-25"
   }
 }
