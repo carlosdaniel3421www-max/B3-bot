@@ -104,5 +104,20 @@
       5
     ],
     "ultima_data_score": "2026-08-25"
+  },
+  "WEGE3": {
+    "score": 6,
+    "direcao": "compra",
+    "data_primeiro_alerta": "2026-08-25",
+    "score_history": [
+      6
+    ],
+    "ultima_data_score": "2026-08-25"
+  },
+  "JBSS32": {
+    "score_history": [
+      4
+    ],
+    "ultima_data_score": "2026-08-25"
   }
 }
