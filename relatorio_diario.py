@@ -26,7 +26,7 @@ from gestao_risco import calcular_tamanho_posicao
 from estado import carregar_estado, salvar_estado, atualizar_estado, score_suavizado
 from ai_analyzer import AIAnalyzer
 from posicoes import carregar_posicoes, formatar_gestao_todas, salvar_proposta_entrada
-from b3_swing_analyzer import sugerir_stop_alvo, plotar_grafico, determinar_veredito
+from b3_swing_analyzer import sugerir_stop_alvo, plotar_grafico, determinar_veredito, avaliar_regime_ibov
 from trava import montar_trava, formatar_trava
 from telegram_utils import enviar_mensagem, enviar_album
 
@@ -213,7 +213,7 @@ def _montar_analisador_ia() -> AIAnalyzer | None:
     )
 
 
-def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
+def rodar_analise_ia(resultados: list, arquivo_estado: str, regime_ibov: dict = None) -> str:
     """
     Roda a IA (Gemini) em todos os ativos com score >= SCORE_MINIMO_IA e monta
     uma mensagem consolidada de segunda opinião. Sempre roda, independente de
@@ -275,6 +275,10 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str) -> str:
                 reasons=r["motivos"],
                 news=noticias_ativo,
                 chart_path=caminho,
+                extra_context={
+                    "regime_ibov": (regime_ibov or {}).get("texto_curto", ""),
+                    "aviso_ibov": (regime_ibov or {}).get("texto_aviso", ""),
+                },
             )
         except Exception as e:
             # Nunca deixa uma falha inesperada da IA derrubar o relatório.
@@ -350,7 +354,7 @@ def _formatar_veredito_trava(resposta_ia) -> str:
     return "\n".join(linhas)
 
 
-def rodar_analise_trava_ia(resultados: list) -> str:
+def rodar_analise_trava_ia(resultados: list, regime_ibov: dict = None) -> str:
     """
     Monta a TRAVA (Bull/Bear Spread) com preços REAIS do opcoes.net.br para
     os ativos com score >= 8, e pede à IA (Nemotron/Gemini) uma leitura
@@ -394,6 +398,12 @@ def rodar_analise_trava_ia(resultados: list) -> str:
             try:
                 venc_data = trava.get("vencimento_data") or "N/A"
                 dias_uteis = trava.get("dias_vencimento") or "N/A"
+                contexto_ibov = ""
+                if regime_ibov and regime_ibov.get("regime") != "indisponivel":
+                    contexto_ibov = (
+                        f"- Regime do Ibovespa: {regime_ibov.get('texto_curto', '')}. "
+                        f"{regime_ibov.get('texto_aviso', '')}\n"
+                    )
                 prompt_trava = (
                     f"Você é um especialista em opções da B3. Avalie EXCLUSIVAMENTE esta TRAVA "
                     f"para {ticker}.\n\n"
@@ -402,6 +412,7 @@ def rodar_analise_trava_ia(resultados: list) -> str:
                     f"- O vencimento desta trava é {venc_data}, que fica a "
                     f"{dias_uteis} DIAS ÚTEIS da data de hoje (cerca de 1-2 meses, "
                     f"o próximo vencimento mensal normal da B3 — NÃO são anos).\n"
+                    f"{contexto_ibov}"
                     f"- Preço atual do ativo: R$ {preco:.2f}. Direção do robô: {direcao}.\n\n"
                     f"{bloco_trava}\n\n"
                     "Avalie se a trava vale a pena: custo, risco/retorno, liquidez e "
@@ -412,6 +423,8 @@ def rodar_analise_trava_ia(resultados: list) -> str:
                     "strike 'não tem liquidez' se os dados mostram negócios > 0.\n"
                     "- Se os dados mostram negócios e volume reais, considere a trava "
                     "executável.\n"
+                    "- Considere também o REGIME DO IBOVESPA acima: se o mercado está "
+                    "lateral/choppy, pondere que rompimentos tendem a falhar.\n"
                     "- Baseie o veredito principalmente em: custo vs ganho máximo, "
                     "relação risco/retorno, e se o preço está perto da zona de lucro.\n"
                     "Responda APENAS com JSON, com os campos exatos:\n"
@@ -517,10 +530,12 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
     margem_saida_estado = margem_saida_estado if margem_saida_estado is not None else config.MARGEM_SAIDA_ESTADO
 
     logging.info("%s — Rodando screener...", titulo)
+    regime_ibov = avaliar_regime_ibov()
     resultados = rodar_screener(
         watchlist=watchlist, periodo=periodo,
         usar_curto_prazo=usar_curto_prazo, projetar_volume=projetar_volume,
         confirmar_intradiario=confirmar_intradiario,
+        regime_ibov=regime_ibov,
     )
     hoje = date.today().strftime("%d/%m/%Y")
 
@@ -592,6 +607,13 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
     if nota_extra:
         cabecalho_msg += f"{nota_extra}\n"
 
+    # --- Status do Ibovespa (regime de mercado) no topo ---
+    if regime_ibov.get("regime") != "indisponivel":
+        cabecalho_msg += f"📊 <b>Ibovespa:</b> {regime_ibov.get('texto_curto', '')}\n"
+        aviso_ibov = regime_ibov.get("texto_aviso", "")
+        if aviso_ibov:
+            cabecalho_msg += f"⚠️ {aviso_ibov}\n"
+
     # --- Resumo executivo de vereditos no topo ---
     contagem = {"ENTRAR": [], "AGUARDAR": [], "EVITAR": [], "SEM SINAL": []}
     for r in resultados:
@@ -645,7 +667,7 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
 
     # --- IA analisa visualmente e manda mensagem separada no final ---
     logging.info("Rodando análise visual da IA...")
-    mensagem_ia = rodar_analise_ia(resultados, arquivo_estado)
+    mensagem_ia = rodar_analise_ia(resultados, arquivo_estado, regime_ibov)
     if mensagem_ia:
         LIMITE_IA = 3800
         if len(mensagem_ia) <= LIMITE_IA:
@@ -666,7 +688,7 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
 
     # --- TRAVA com preços reais + IA exclusiva: mensagem separada depois da IA ---
     logging.info("Montando travas com preços reais...")
-    mensagem_trava = rodar_analise_trava_ia(resultados)
+    mensagem_trava = rodar_analise_trava_ia(resultados, regime_ibov)
     if mensagem_trava:
         LIMITE_TRAVA = 3800
         if len(mensagem_trava) <= LIMITE_TRAVA:

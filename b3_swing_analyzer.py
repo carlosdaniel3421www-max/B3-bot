@@ -845,6 +845,229 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
 
 
 # --------------------------------------------------------------------------
+# 3.5 REGIME DE MERCADO (IBOVESPA)
+# --------------------------------------------------------------------------
+
+def calcular_adx(df: pd.DataFrame, periodo: int = 14) -> float:
+    """
+    Average Directional Index — mede a FORÇA da tendência (não a direção).
+    ADX < 22 = tendência fraca / mercado lateral (choppy).
+    ADX > 25 = tendência em andamento.
+    Retorna NaN se dados insuficientes.
+    """
+    if len(df) < periodo * 2 + 1:
+        return float("nan")
+    try:
+        high = df["high"].astype(float)
+        low = df["low"].astype(float)
+        close = df["close"].astype(float)
+
+        up = high.diff()
+        dn = -low.diff()
+
+        plus_dm = up.where((up > dn) & (up > 0), 0.0)
+        minus_dm = dn.where((dn > up) & (dn > 0), 0.0)
+
+        tr1 = high - low
+        tr2 = (high - close.shift()).abs()
+        tr3 = (low - close.shift()).abs()
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+        atr = tr.rolling(periodo).mean()
+        pdi = 100 * plus_dm.rolling(periodo).mean() / atr
+        ndi = 100 * minus_dm.rolling(periodo).mean() / atr
+
+        soma = pdi + ndi
+        dx = 100 * (pdi - ndi).abs() / soma.replace(0, np.nan)
+        adx = dx.rolling(periodo).mean()
+        return float(adx.iloc[-1])
+    except Exception:
+        return float("nan")
+
+
+def calcular_eficiencia(serie: pd.Series, n: int = 10) -> float:
+    """
+    Eficiência de Kaufman (Efficiency Ratio): movimento líquido / movimento
+    total. Próximo de 1 = direcional (tendência). Próximo de 0 = sobe e desce
+    (choppy/lateral).
+    """
+    try:
+        if len(serie) <= n:
+            return 0.0
+        movimento_liq = abs(serie.iloc[-1] - serie.iloc[-1 - n])
+        movimento_total = serie.diff().abs().iloc[-n:].sum()
+        if movimento_total <= 0:
+            return 0.0
+        return float(movimento_liq / movimento_total)
+    except Exception:
+        return 0.0
+
+
+def classificar_regime_ibov(adx: float, di_pos: float, di_neg: float,
+                            eficiencia_10d: float, dist_sma50_pct: float,
+                            var_5d: float, var_20d: float) -> dict:
+    """
+    Classifica o regime do mercado a partir das métricas calculadas.
+    Retorna dict com regime, tetos de score por direção e textos.
+
+    Regras:
+      - 🟢 ALTA:   ADX > 22, DI+ > DI-, eficiência > 0.5, preço > SMA50
+      - 🔴 BAIXA:  ADX > 22, DI- > DI+, eficiência > 0.5, preço < SMA50
+      - 🟡 LATERAL: caso contrário (tendência fraca ou choppy)
+    """
+    adx_ok = adx == adx  # not NaN
+    if not adx_ok or not (eficiencia_10d == eficiencia_10d):
+        return {
+            "regime": "indisponivel",
+            "tetos": {"compra": 10, "venda": 10},
+            "texto_curto": "⚪ INDISPONÍVEL",
+            "texto_aviso": "",
+        }
+
+    teto_lateral = 7  # nunca ENTRAR (>=8) em mercado sem direção
+    if adx > 22 and eficiencia_10d > 0.5:
+        if di_pos > di_neg and dist_sma50_pct > 0:
+            return {
+                "regime": "alta",
+                "tetos": {"compra": 10, "venda": teto_lateral},
+                "texto_curto": (
+                    f"🟢 ALTA (ADX {adx:.0f}, eficiência {eficiencia_10d:.2f}, "
+                    f"5d {var_5d:+.1f}% / 20d {var_20d:+.1f}%)"
+                ),
+                "texto_aviso": "Mercado em alta — vendas limitadas a 7/10.",
+            }
+        if di_neg > di_pos and dist_sma50_pct < 0:
+            return {
+                "regime": "baixa",
+                "tetos": {"compra": teto_lateral, "venda": 10},
+                "texto_curto": (
+                    f"🔴 BAIXA (ADX {adx:.0f}, eficiência {eficiencia_10d:.2f}, "
+                    f"5d {var_5d:+.1f}% / 20d {var_20d:+.1f}%)"
+                ),
+                "texto_aviso": "Mercado em baixa — compras limitadas a 7/10.",
+            }
+
+    return {
+        "regime": "lateral",
+        "tetos": {"compra": teto_lateral, "venda": teto_lateral},
+        "texto_curto": (
+            f"🟡 LATERAL (ADX {adx:.0f}, eficiência {eficiencia_10d:.2f}, "
+            f"5d {var_5d:+.1f}% / 20d {var_20d:+.1f}%)"
+        ),
+        "texto_aviso": (
+            "Mercado sem direção (choppy) — compras e vendas limitadas a 7/10. "
+            "Sinais de rompimento tendem a falhar."
+        ),
+    }
+
+
+def baixar_dados_ibov(periodo: str = "1y") -> pd.DataFrame | None:
+    """
+    Baixa o Ibovespa (^BVSP) via yfinance com cache diário.
+    Retorna None se falhar. Colunas em minúsculas (close/high/low/volume).
+    """
+    import datetime
+    import os
+    import pickle
+    import yfinance as yf
+
+    cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
+    cache_file = os.path.join(cache_dir, "^BVSP_ibov.pkl")
+    try:
+        if os.path.exists(cache_file):
+            mod_time = datetime.datetime.fromtimestamp(os.path.getmtime(cache_file)).date()
+            if mod_time == datetime.date.today():
+                with open(cache_file, "rb") as f:
+                    df = pickle.load(f)
+                df.index = pd.to_datetime(df.index)
+                df.index.name = "date"
+                return df
+    except Exception:
+        pass
+
+    try:
+        df = yf.download("^BVSP", period=periodo, interval="1d", progress=False)
+        if df is None or df.empty:
+            return None
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df = df.rename(columns=str.lower)
+        df.index.name = "date"
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            with open(cache_file, "wb") as f:
+                pickle.dump(df, f)
+        except Exception:
+            pass
+        return df
+    except Exception:
+        return None
+
+
+def avaliar_regime_ibov(periodo: str = "1y") -> dict:
+    """
+    Avalia o regime de mercado (Ibovespa) completo.
+    Retorna dict com regime, métricas, tetos de score e textos formatados.
+    Em caso de falha, retorna regime 'indisponivel' (sem filtro).
+    """
+    df = baixar_dados_ibov(periodo)
+    if df is None or len(df) < 60:
+        return {
+            "regime": "indisponivel",
+            "tetos": {"compra": 10, "venda": 10},
+            "texto_curto": "⚪ INDISPONÍVEL",
+            "texto_aviso": "",
+            "adx": None, "di_pos": None, "di_neg": None,
+            "eficiencia_5d": None, "eficiencia_10d": None,
+            "var_5d": None, "var_20d": None, "dist_sma200_pct": None,
+            "dist_sma50_pct": None,
+        }
+
+    close = df["close"].astype(float)
+    ultimo = float(close.iloc[-1])
+    sma50 = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else float("nan")
+    sma200 = float(close.rolling(200).mean().iloc[-1]) if len(close) >= 200 else float("nan")
+
+    adx = calcular_adx(df)
+    eficiencia_5d = calcular_eficiencia(close, 5)
+    eficiencia_10d = calcular_eficiencia(close, 10)
+
+    # DI+/DI- do cálculo do ADX (últimos valores)
+    di_pos, di_neg = float("nan"), float("nan")
+    if len(df) > 14 * 2:
+        high = df["high"].astype(float)
+        low = df["low"].astype(float)
+        up = high.diff()
+        dn = -low.diff()
+        plus_dm = up.where((up > dn) & (up > 0), 0.0)
+        minus_dm = dn.where((dn > up) & (dn > 0), 0.0)
+        tr1 = high - low
+        tr2 = (high - df["close"].astype(float).shift()).abs()
+        tr3 = (low - df["close"].astype(float).shift()).abs()
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        atr = tr.rolling(14).mean()
+        di_pos = float((100 * plus_dm.rolling(14).mean() / atr).iloc[-1])
+        di_neg = float((100 * minus_dm.rolling(14).mean() / atr).iloc[-1])
+
+    var_5d = (ultimo / float(close.iloc[-6]) - 1) * 100 if len(close) > 6 else 0.0
+    var_20d = (ultimo / float(close.iloc[-21]) - 1) * 100 if len(close) > 21 else 0.0
+    dist_sma50_pct = (ultimo / sma50 - 1) * 100 if sma50 == sma50 and sma50 > 0 else 0.0
+    dist_sma200_pct = (ultimo / sma200 - 1) * 100 if sma200 == sma200 and sma200 > 0 else 0.0
+
+    classificacao = classificar_regime_ibov(
+        adx, di_pos, di_neg, eficiencia_10d, dist_sma50_pct, var_5d, var_20d,
+    )
+    classificacao.update({
+        "adx": adx, "di_pos": di_pos, "di_neg": di_neg,
+        "eficiencia_5d": eficiencia_5d, "eficiencia_10d": eficiencia_10d,
+        "var_5d": var_5d, "var_20d": var_20d,
+        "dist_sma50_pct": dist_sma50_pct, "dist_sma200_pct": dist_sma200_pct,
+        "preco_ibov": ultimo,
+    })
+    return classificacao
+
+
+# --------------------------------------------------------------------------
 # 4. GRÁFICO
 # --------------------------------------------------------------------------
 

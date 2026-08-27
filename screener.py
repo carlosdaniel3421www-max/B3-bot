@@ -10,6 +10,7 @@ from b3_swing_analyzer import (
     baixar_dados, calcular_indicadores, avaliar_ativo,
     calcular_indicadores_curto_prazo, avaliar_ativo_curto_prazo,
     projetar_volume_dia_atual, avaliar_timeframe_horario,
+    avaliar_regime_ibov,
 )
 
 # Lista base: principais ativos do Ibovespa com opções líquidas na B3.
@@ -22,7 +23,7 @@ WATCHLIST_PADRAO = [
 
 
 def _processar_ativo(ticker, periodo, usar_curto_prazo, projetar_volume,
-                     confirmar_intradiario) -> dict | None:
+                     confirmar_intradiario, regime_ibov=None) -> dict | None:
     """Processa um ativo individualmente (para paralelismo)."""
     try:
         df = baixar_dados(ticker, periodo=periodo)
@@ -53,6 +54,17 @@ def _processar_ativo(ticker, periodo, usar_curto_prazo, projetar_volume,
                     f"— cautela redobrada, sinal pode estar perdendo força intradiária"
                 )
 
+        # Filtro de regime de mercado (Ibovespa): limita o score pela direção.
+        # Ex: mercado LATERAL limita compra E venda a 7/10 (nunca ENTRAR).
+        if regime_ibov and direcao != "neutro":
+            tetos = regime_ibov.get("tetos") or {}
+            teto = tetos.get(direcao)
+            if teto is not None and score > teto:
+                score = teto
+                aviso = regime_ibov.get("texto_aviso", "")
+                if aviso:
+                    motivos.append(f"⚠️ Ibovespa: {aviso}")
+
         return {
             "ticker": ticker,
             "score": score,
@@ -68,23 +80,16 @@ def _processar_ativo(ticker, periodo, usar_curto_prazo, projetar_volume,
 
 def rodar_screener(watchlist=None, periodo="2y", pausa=0.3,
                     usar_curto_prazo: bool = False, projetar_volume: bool = False,
-                    confirmar_intradiario: bool = False, paralelo: bool = True) -> list:
+                    confirmar_intradiario: bool = False, paralelo: bool = True,
+                    regime_ibov: dict = None) -> list:
     """
     Roda a avaliação (placar 0-10) para cada ativo da watchlist.
-    `pausa` evita sobrecarregar a fonte de dados com requisições muito rápidas.
-    usar_curto_prazo: usa o motor de indicadores mais rápidos (SMA5/10/20,
-        RSI7, MACD 5/13/5, Estocástico7) em vez do padrão — pensado pra
-        relatórios de prazo mais curto (ex: relatório da tarde).
-    projetar_volume: projeta o volume do candle de hoje pro dia inteiro,
-        caso o pregão ainda esteja em andamento (evita falso negativo na
-        comparação de volume por causa de candle parcial).
-    confirmar_intradiario: busca o gráfico de 1 HORA e usa ele pra confirmar
-        (+1 ponto, até o máximo de 10) ou contestar (-2 pontos) o sinal do
-        gráfico diário. Só faz sentido junto com usar_curto_prazo=True.
-    paralelo: usa ThreadPoolExecutor para baixar os ativos em paralelo
-        (bem mais rápido; `pausa` vira o intervalo entre submissões).
+    regime_ibov: dict com tetos de score por direção (output de avaliar_regime_ibov).
+                 Se None, calcula automaticamente.
     Retorna lista de dicts ordenada do nível mais alto para o mais baixo.
     """
+    if regime_ibov is None:
+        regime_ibov = avaliar_regime_ibov()
     watchlist = watchlist or WATCHLIST_PADRAO
     resultados = []
 
@@ -93,7 +98,7 @@ def rodar_screener(watchlist=None, periodo="2y", pausa=0.3,
             futuros = {
                 executor.submit(
                     _processar_ativo, t, periodo, usar_curto_prazo,
-                    projetar_volume, confirmar_intradiario,
+                    projetar_volume, confirmar_intradiario, regime_ibov,
                 ): t
                 for t in watchlist
             }
@@ -105,7 +110,7 @@ def rodar_screener(watchlist=None, periodo="2y", pausa=0.3,
         for ticker in watchlist:
             r = _processar_ativo(
                 ticker, periodo, usar_curto_prazo, projetar_volume,
-                confirmar_intradiario,
+                confirmar_intradiario, regime_ibov,
             )
             if r:
                 resultados.append(r)
