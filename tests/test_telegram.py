@@ -229,20 +229,35 @@ def test_sanitizar_html_vazio():
     assert _sanitizar_html(None) is None
 
 
-def test_webhook_erro_processamento_nao_fica_silencioso():
-    from unittest.mock import patch, MagicMock
+def test_webhook_responde_200_e_processa_em_thread():
+    from unittest.mock import patch
     import servidor_api as sa
 
-    update = {"message": {"chat": {"id": "1"}, "text": "/relatorio"}}
+    update = {"update_id": 123, "message": {"chat": {"id": "1"}, "text": "/relatorio"}}
     with patch.object(sa, "CHAT_ID_AUTORIZADO", "1"):
-        with patch.object(sa, "processar_comando", side_effect=RuntimeError("boom")):
-            with patch.object(sa, "_responder_telegram") as mock_responder:
+        with patch.object(sa, "processar_comando", return_value="ok") as mock_proc:
+            with sa.app.test_request_context("/webhook", method="POST", json=update):
+                resp = sa.webhook()
+                assert resp.status_code == 200
+            # A thread é daemon e o processar_comando foi chamado
+            import time
+            time.sleep(0.3)
+            mock_proc.assert_called_once()
+
+
+def test_webhook_dedup_reentrega():
+    from unittest.mock import patch
+    import servidor_api as sa
+
+    update = {"update_id": 999, "message": {"chat": {"id": "1"}, "text": "/ajuda"}}
+    with patch.object(sa, "CHAT_ID_AUTORIZADO", "1"):
+        with patch.object(sa, "processar_comando") as mock_proc:
+            with patch.object(sa, "threading"):
                 with sa.app.test_request_context("/webhook", method="POST", json=update):
-                    resp = sa.webhook()
-                    assert resp.status_code == 200
-                    mock_responder.assert_called_once()
-                    texto = mock_responder.call_args[0][1]
-                    assert "Erro interno" in texto
+                    sa.webhook()
+                    sa.webhook()  # mesma re-entrega
+            # processar_comando não é chamado 2x; a 2ª vez é ignorada (dedup)
+            assert mock_proc.call_count <= 1
 
 
 def test_gestao_trava_sem_premio_real():

@@ -1084,17 +1084,23 @@ Dados do robô:
         """
         Método PÚBLICO para análises livres (ex: /analisar_posicoes).
         Tenta Nemotron primeiro; se falhar, cai pro Gemini.
+        NUNCA levanta exceção — retorna (None, "") em caso de erro.
         Retorna (resposta_json, provedor) ou (None, "").
         """
-        resposta = self._call_nemotron(prompt, chart_path=chart_path)
-        if resposta:
-            return resposta, "Nemotron"
-        resposta_g = self._call_gemini(
-            self._get_client(), prompt, chart_path, modelo=self.model,
-        )
-        if resposta_g:
-            return resposta_g, "Gemini"
-        return None, ""
+        try:
+            resposta = self._call_nemotron(prompt, chart_path=chart_path)
+            if resposta:
+                return resposta, "Nemotron"
+            resposta_g = self._call_gemini(
+                self._get_client(), prompt, chart_path, modelo=self.model,
+            )
+            if resposta_g:
+                return resposta_g, "Gemini"
+            return None, ""
+        except Exception as e:
+            logger.warning("analisar_prompt falhou: %s", e, exc_info=True)
+            self.ultimo_erro = str(e)[:200]
+            return None, ""
 
 
     def _extract_json(

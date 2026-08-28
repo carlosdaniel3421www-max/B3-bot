@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import sys
+import threading
 
 from flask import Flask, request, jsonify
 
@@ -36,6 +37,11 @@ if not CHAT_ID_AUTORIZADO:
     logger.warning("Para segurança, configure TELEGRAM_CHAT_ID como secret no Render.")
 
 WEBHOOK_URL = ""  # será preenchido ao iniciar
+
+# Guarda update_ids já processados (chave -> timestamp) para ignorar
+# re-entregas do Telegram quando a resposta da primeira chamada demora.
+_processados = {}
+_MAX_RECENTES = 100
 
 
 def _baixar_estado_do_github():
@@ -118,7 +124,11 @@ def _responder_telegram(chat_id, texto):
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    """Recebe updates do Telegram em tempo real (webhook)."""
+    """Recebe updates do Telegram em tempo real (webhook).
+    Responde 200 IMEDIATAMENTE para evitar que o Telegram re-entregue o
+    update (causando mensagens duplicadas quando a IA demora). O
+    processamento do comando roda em background.
+    """
     try:
         update = request.get_json(force=True)
     except Exception:
@@ -132,6 +142,7 @@ def webhook():
     if not msg:
         return jsonify({"ok": True})  # ignora outros tipos de update
 
+    update_id = update.get("update_id", 0)
     chat_id = str(msg.get("chat", {}).get("id", ""))
     texto = msg.get("text") or ""
 
@@ -143,21 +154,43 @@ def webhook():
         logger.info("Ignorado comando de chat não autorizado: %s", chat_id)
         return jsonify({"ok": True})
 
-    # Processa o comando (reusa toda a lógica do Telegram)
-    logger.info("Comando recebido: %s", texto)
-    try:
-        resposta = processar_comando(TOKEN, chat_id, texto)
-    except Exception as e:
-        # Nunca deixa um erro de processamento virar silêncio pro usuário
-        logger.exception("Erro inesperado ao processar comando %s: %s", texto, e)
-        resposta = "⚠️ Erro interno ao processar o comando. Tente novamente em instantes."
+    # Deduplicação: evita reprocessar o mesmo update que o Telegram
+    # re-entregou por achar que o webhook não respondeu a tempo.
+    if update_id in _processados:
+        logger.info("Update %s já processado — ignorando re-entrega", update_id)
+        return jsonify({"ok": True})
+    _processados[update_id] = True
+    if len(_processados) > _MAX_RECENTES:
+        # Limpa os mais antigos para não vazar memória
+        antigos = sorted(_processados)[: -_MAX_RECENTES]
+        for k in antigos:
+            _processados.pop(k, None)
 
-    if resposta:
-        _responder_telegram(chat_id, resposta)
-    else:
-        _responder_telegram(chat_id, "❓ Não entendi. Use /ajuda pra ver os comandos.")
+    # Responde 200 AGORA (Telegram confirma recebimento) e processa depois
+    threading.Thread(
+        target=_processar_comando_em_thread,
+        args=(update_id, chat_id, texto),
+        daemon=True,
+    ).start()
 
     return jsonify({"ok": True})
+
+
+def _processar_comando_em_thread(update_id: int, chat_id: str, texto: str):
+    """Processa o comando numa thread separada (não bloqueia o webhook)."""
+    try:
+        logger.info("Processando comando %s (update %s)", texto, update_id)
+        resposta = processar_comando(TOKEN, chat_id, texto)
+        if resposta:
+            _responder_telegram(chat_id, resposta)
+        else:
+            _responder_telegram(chat_id, "❓ Não entendi. Use /ajuda pra ver os comandos.")
+    except Exception as e:
+        logger.exception("Erro ao processar comando %s: %s", texto, e)
+        try:
+            _responder_telegram(chat_id, "⚠️ Erro interno ao processar o comando.")
+        except Exception:
+            pass
 
 
 @app.route("/health", methods=["GET"])
