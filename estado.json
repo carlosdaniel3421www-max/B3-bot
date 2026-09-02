@@ -5,18 +5,21 @@
     "data_primeiro_alerta": "2026-08-27",
     "score_history": [
       6,
-      6,
-      7
+      7,
+      2
     ],
-    "ultima_data_score": "2026-09-01"
+    "ultima_data_score": "2026-09-02"
   },
   "VALE3": {
+    "score": 6,
+    "direcao": "compra",
+    "data_primeiro_alerta": "2026-09-02",
     "score_history": [
-      4,
       5,
-      5
+      5,
+      7
     ],
-    "ultima_data_score": "2026-09-01"
+    "ultima_data_score": "2026-09-02"
   },
   "B3SA3": {
     "score": 6,
@@ -25,20 +28,20 @@
     "score_history": [
       6,
       6,
-      6
+      7
     ],
-    "ultima_data_score": "2026-09-01"
+    "ultima_data_score": "2026-09-02"
   },
   "PETR4": {
     "score": 7,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-28",
     "score_history": [
-      7,
       6,
-      8
+      8,
+      7
     ],
-    "ultima_data_score": "2026-09-01"
+    "ultima_data_score": "2026-09-02"
   },
   "PRIO3": {
     "score": 6,
@@ -46,20 +49,68 @@
     "data_primeiro_alerta": "2026-09-01",
     "score_history": [
       4,
+      7,
       7
     ],
-    "ultima_data_score": "2026-09-01"
+    "ultima_data_score": "2026-09-02"
   },
   "BBAS3": {
     "score_history": [
-      4
+      4,
+      5
     ],
-    "ultima_data_score": "2026-09-01"
+    "ultima_data_score": "2026-09-02"
   },
   "AXIA3": {
     "score_history": [
+      4,
       4
     ],
-    "ultima_data_score": "2026-09-01"
+    "ultima_data_score": "2026-09-02"
+  },
+  "WEGE3": {
+    "score": 7,
+    "direcao": "compra",
+    "data_primeiro_alerta": "2026-09-02",
+    "score_history": [
+      7
+    ],
+    "ultima_data_score": "2026-09-02"
+  },
+  "GGBR4": {
+    "score": 7,
+    "direcao": "compra",
+    "data_primeiro_alerta": "2026-09-02",
+    "score_history": [
+      7
+    ],
+    "ultima_data_score": "2026-09-02"
+  },
+  "SUZB3": {
+    "score": 6,
+    "direcao": "compra",
+    "data_primeiro_alerta": "2026-09-02",
+    "score_history": [
+      6
+    ],
+    "ultima_data_score": "2026-09-02"
+  },
+  "BBDC4": {
+    "score_history": [
+      4
+    ],
+    "ultima_data_score": "2026-09-02"
+  },
+  "EQTL3": {
+    "score_history": [
+      4
+    ],
+    "ultima_data_score": "2026-09-02"
+  },
+  "USIM5": {
+    "score_history": [
+      4
+    ],
+    "ultima_data_score": "2026-09-02"
   }
 }
