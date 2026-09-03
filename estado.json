@@ -4,11 +4,11 @@
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-27",
     "score_history": [
-      6,
       7,
+      2,
       2
     ],
-    "ultima_data_score": "2026-09-02"
+    "ultima_data_score": "2026-09-03"
   },
   "VALE3": {
     "score": 6,
@@ -16,101 +16,115 @@
     "data_primeiro_alerta": "2026-09-02",
     "score_history": [
       5,
-      5,
-      7
+      7,
+      2
     ],
-    "ultima_data_score": "2026-09-02"
+    "ultima_data_score": "2026-09-03"
   },
   "B3SA3": {
-    "score": 6,
+    "score": 7,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-26",
     "score_history": [
       6,
-      6,
+      7,
       7
     ],
-    "ultima_data_score": "2026-09-02"
+    "ultima_data_score": "2026-09-03"
   },
   "PETR4": {
     "score": 7,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-28",
     "score_history": [
-      6,
       8,
+      7,
       7
     ],
-    "ultima_data_score": "2026-09-02"
+    "ultima_data_score": "2026-09-03"
   },
   "PRIO3": {
     "score": 6,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-09-01",
     "score_history": [
-      4,
       7,
-      7
+      7,
+      3
     ],
-    "ultima_data_score": "2026-09-02"
+    "ultima_data_score": "2026-09-03"
   },
   "BBAS3": {
     "score_history": [
       4,
-      5
+      5,
+      4
     ],
-    "ultima_data_score": "2026-09-02"
+    "ultima_data_score": "2026-09-03"
   },
   "AXIA3": {
     "score_history": [
       4,
+      4,
       4
     ],
-    "ultima_data_score": "2026-09-02"
+    "ultima_data_score": "2026-09-03"
   },
   "WEGE3": {
-    "score": 7,
+    "score": 8,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-09-02",
     "score_history": [
-      7
+      7,
+      8
     ],
-    "ultima_data_score": "2026-09-02"
+    "ultima_data_score": "2026-09-03"
   },
   "GGBR4": {
-    "score": 7,
+    "score": 6,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-09-02",
     "score_history": [
-      7
+      7,
+      4
     ],
-    "ultima_data_score": "2026-09-02"
+    "ultima_data_score": "2026-09-03"
   },
   "SUZB3": {
     "score": 6,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-09-02",
     "score_history": [
-      6
+      6,
+      5
     ],
-    "ultima_data_score": "2026-09-02"
+    "ultima_data_score": "2026-09-03"
   },
   "BBDC4": {
     "score_history": [
-      4
+      4,
+      3
     ],
-    "ultima_data_score": "2026-09-02"
+    "ultima_data_score": "2026-09-03"
   },
   "EQTL3": {
     "score_history": [
+      4,
       4
     ],
-    "ultima_data_score": "2026-09-02"
+    "ultima_data_score": "2026-09-03"
   },
   "USIM5": {
     "score_history": [
+      4,
       4
     ],
-    "ultima_data_score": "2026-09-02"
+    "ultima_data_score": "2026-09-03"
+  },
+  "CMIG4": {
+    "score_history": [
+      4
+    ],
+    "ultima_data_score": "2026-09-03"
   }
 }
