@@ -4,19 +4,20 @@
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-26",
     "score_history": [
-      7,
-      7,
-      7
+      {
+        "score": 7,
+        "direcao": "compra"
+      }
     ],
     "ultima_data_score": "2026-09-09"
   },
   "PETR4": {
-    "score": 7,
+    "score": 8,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-28",
     "score_history": [
       {
-        "score": 5,
+        "score": 8,
         "direcao": "compra"
       }
     ],
@@ -24,19 +25,20 @@
   },
   "BBAS3": {
     "score_history": [
-      5,
-      5,
-      5
+      {
+        "score": 5,
+        "direcao": "venda"
+      }
     ],
     "ultima_data_score": "2026-09-09"
   },
   "WEGE3": {
-    "score": 7,
+    "score": 8,
     "direcao": "compra",
     "data_primeiro_alerta": "2026-09-02",
     "score_history": [
       {
-        "score": 7,
+        "score": 8,
         "direcao": "compra"
       }
     ],
@@ -69,7 +71,7 @@
   "BBDC4": {
     "score_history": [
       {
-        "score": 5,
+        "score": 4,
         "direcao": "venda"
       }
     ],
@@ -77,16 +79,20 @@
   },
   "EQTL3": {
     "score_history": [
-      4,
-      4,
-      4
+      {
+        "score": 4,
+        "direcao": "venda"
+      }
     ],
     "ultima_data_score": "2026-09-09"
   },
   "CMIG4": {
+    "score": 6,
+    "direcao": "venda",
+    "data_primeiro_alerta": "2026-09-09",
     "score_history": [
       {
-        "score": 4,
+        "score": 6,
         "direcao": "venda"
       }
     ],
@@ -112,12 +118,23 @@
   },
   "AXIA3": {
     "score_history": [
-      4,
-      4
+      {
+        "score": 5,
+        "direcao": "venda"
+      }
     ],
     "ultima_data_score": "2026-09-09"
   },
   "JBSS32": {
+    "score_history": [
+      {
+        "score": 5,
+        "direcao": "compra"
+      }
+    ],
+    "ultima_data_score": "2026-09-09"
+  },
+  "PRIO3": {
     "score_history": [
       {
         "score": 2,
@@ -126,9 +143,21 @@
     ],
     "ultima_data_score": "2026-09-09"
   },
-  "PRIO3": {
+  "LREN3": {
     "score_history": [
-      5
+      {
+        "score": 2,
+        "direcao": "neutro"
+      }
+    ],
+    "ultima_data_score": "2026-09-09"
+  },
+  "USIM5": {
+    "score_history": [
+      {
+        "score": 1,
+        "direcao": "neutro"
+      }
     ],
     "ultima_data_score": "2026-09-09"
   }
