@@ -5,6 +5,18 @@ chaves escritas direto aqui (especialmente se for subir isso pro GitHub).
 """
 
 import os
+import logging
+
+
+def _inteiro_positivo_ambiente(nome, padrao):
+    try:
+        valor = int(os.environ.get(nome, str(padrao)))
+        if valor > 0:
+            return valor
+    except ValueError:
+        pass
+    logging.getLogger(__name__).warning("%s inválido; usando padrão %s", nome, padrao)
+    return padrao
 
 # --- Telegram ---
 # Veja instruções em telegram_utils.py (docstring) para gerar o token.
@@ -14,15 +26,19 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "COLOQUE_SEU_CHAT_ID_AQUI"
 # --- OpLab (opcional, para cadeia de opções real) ---
 OPLAB_TOKEN = os.environ.get("OPLAB_TOKEN", "")  # deixe vazio se não tiver
 
+# Novas entradas; nao filtra a cadeia bruta usada na gestao de posicoes.
+OPCOES_MIN_DIAS_CORRIDOS = 14
+OPCOES_MAX_DIAS_CORRIDOS = 30
+
 # --- GitHub (para acionar o relatório via /relatorio no Telegram) ---
 # Crie em: Settings -> Developer settings -> Personal access tokens -> Fine-grained tokens
 # Permissão necessária: Actions: Write (no repositório B3-bot)
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
 # --- IA visual (Google Gemini) para revisar os sinais olhando o gráfico ---
-# Plano GRATUITO (sem prazo de validade): aistudio.google.com -> Get API Key
+# Chave: aistudio.google.com -> Get API Key. Cotas e acesso dependem da conta.
 # Sem chave configurada, o robô usa só o placar técnico (não quebra nada).
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 # ==============================
 # CONFIGURAÇÃO GEMINI IA
 # ==============================
@@ -30,30 +46,20 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get(
     "GEMINI_MODEL",
     "gemini-3.5-flash-lite"
-)
+).strip() or "gemini-3.5-flash-lite"
 
-GEMINI_TIMEOUT_SECONDS = int(
-    os.environ.get(
-        "GEMINI_TIMEOUT_SECONDS",
-        "45"
-    )
-)
+GEMINI_TIMEOUT_SECONDS = _inteiro_positivo_ambiente("GEMINI_TIMEOUT_SECONDS", 45)
 
-GEMINI_MAX_RETRIES = int(
-    os.environ.get(
-        "GEMINI_MAX_RETRIES",
-        "3"
-    )
-)
+GEMINI_MAX_RETRIES = _inteiro_positivo_ambiente("GEMINI_MAX_RETRIES", 3)
 USAR_IA_ANALISE = True
 
-# --- IA híbrida: Gemini descreve o gráfico (grátis) + Nemotron 3 Ultra Free ---
-# Chave GRÁTIS do opencode zen (https://opencode.ai/auth -> Keys):
-# mesmo modelo que o opencode usa. Sem cartão de crédito.
+# --- IA híbrida: Gemini descreve o gráfico + Nemotron ---
+# Chave do opencode zen (https://opencode.ai/auth -> Keys).
+# Nomes configurados não garantem disponibilidade nem gratuidade do provedor.
 # Sem chave, volta pro Gemini puro.
-CARLOS = os.environ.get("CARLOS", "")
-CARLOS_model = os.environ.get("CARLOS_model", "nemotron-3-ultra-free")
-CARLOS_base_url = os.environ.get("CARLOS_base_url", "https://opencode.ai/zen/v1")
+CARLOS = os.environ.get("CARLOS", "").strip()
+CARLOS_model = os.environ.get("CARLOS_model", "nemotron-3-ultra-free").strip() or "nemotron-3-ultra-free"
+CARLOS_base_url = os.environ.get("CARLOS_base_url", "https://opencode.ai/zen/v1").strip() or "https://opencode.ai/zen/v1"
 
 # --- Screener ---
 # Ativos que você opera.
@@ -71,6 +77,20 @@ CAPITAL_DISPONIVEL = 10000.0     # capital total que você usa pra operar (ajust
 RISCO_POR_OPERACAO_PCT = 1.0     # % do capital que você aceita perder POR operação (1-2% é o padrão de mercado)
 RISCO_MAXIMO_ATR_MULT = 3.0      # teto de risco por ação, em múltiplos de ATR (evita stop absurdo em forte tendência)
 MARGEM_SAIDA_ESTADO = 2          # zona de amortecimento (em pontos) pra não repetir alerta quando o score oscila perto do gatilho
+
+# --- Politica de candidatos e carteira (hipoteses a validar em simulacao) ---
+EXIGIR_SETUP = True  # Candidato exige gatilho posterior; nao e ordem executada.
+RISCO_MAX_CARTEIRA_PCT = 3.0
+EXPOSICAO_MAX_SETOR_PCT = 40.0
+SETORES = {
+    "PETR4": "petroleo", "PRIO3": "petroleo", "VALE3": "mineracao",
+    "ITUB4": "bancos", "BBAS3": "bancos", "BBDC4": "bancos",
+    "CMIG4": "energia", "AXIA3": "energia", "EQTL3": "energia",
+    "WEGE3": "industria", "SUZB3": "celulose", "B3SA3": "bolsa",
+    "ABEV3": "bebidas", "RENT3": "locacao", "JBSS32": "alimentos",
+    "GGBR4": "siderurgia", "USIM5": "siderurgia", "RAIL3": "logistica",
+    "LREN3": "varejo",
+}
 
 # --- Calendário de resultados ---
 DIAS_MINIMOS_ANTES_RESULTADO = 5  # não sugere entrada se faltar menos que isso pro próximo resultado trimestral

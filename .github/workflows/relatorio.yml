@@ -8,12 +8,21 @@ on:
 permissions:
   contents: write
 
+env:
+  TZ: America/Sao_Paulo
+
 jobs:
   rodar-relatorio:
     runs-on: ubuntu-latest
+    concurrency:
+      group: relatorio-estado-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - name: Baixar o código do repositório
+        id: checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
 
       - name: Configurar Python
         uses: actions/setup-python@v5
@@ -29,12 +38,49 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CARLOS: ${{ secrets.CARLOS }}
+          # Persistencia somente no commit final, nao por arquivo via API.
+          GITHUB_TOKEN: ""
         run: python relatorio_diario.py
 
-      - name: Salvar histórico de alertas (estado.json)
+      - name: Salvar estado, sinais e propostas
+        if: ${{ always() && steps.checkout.outcome == 'success' }}
+        shell: bash
+        env:
+          BRANCH: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
           git config user.name "robo-b3-bot"
           git config user.email "actions@github.com"
-          git add estado.json
-          git diff --staged --quiet || git commit -m "Atualiza estado.json [skip ci]"
-          git push
+          for arquivo in estado.json sinais.json propostas.json; do
+            if [[ ! -f "$arquivo" ]]; then
+              echo "::notice::Arquivo ausente, nao sera adicionado: $arquivo"
+              continue
+            fi
+            if git ls-files --error-unmatch -- "$arquivo" >/dev/null 2>&1; then
+              git add -- "$arquivo"
+            elif git check-ignore -q -- "$arquivo"; then
+              echo "::warning::Arquivo ignorado e nao rastreado, nao sera adicionado: $arquivo"
+            else
+              git add -- "$arquivo"
+            fi
+          done
+          if git diff --staged --quiet; then
+            exit 0
+          fi
+          git commit -m "Atualiza estado, sinais e propostas [skip ci]"
+          # Sem force/rebase: outro escritor exige reconciliacao explicita.
+          if ! git push origin "HEAD:refs/heads/$BRANCH"; then
+            echo "::error::Falha ao persistir dados (possivel concorrencia/non-fast-forward). Reconciliar os JSONs antes de reexecutar; nenhum overwrite foi forcado."
+            exit 1
+          fi
+
+      - name: Preservar dados para reconciliacao em caso de falha
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dados-relatorio-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            estado.json
+            sinais.json
+            propostas.json
+          if-no-files-found: ignore

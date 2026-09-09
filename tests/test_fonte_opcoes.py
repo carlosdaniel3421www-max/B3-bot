@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Testes do módulo fonte_opcoes (API opcoes.net.br) com mock, sem rede."""
 from unittest.mock import patch, MagicMock
+from datetime import date
 import pytest
 from fonte_opcoes import (
     buscar_cadeia_opcoesnet,
@@ -12,8 +13,14 @@ from fonte_opcoes import (
 
 
 @pytest.fixture(autouse=True)
-def _limpa_cache():
+def _limpa_cache(monkeypatch):
     """Limpa o cache entre testes para não vazar dados de um mock pro outro."""
+    class DataFixture(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 8, 24)
+
+    monkeypatch.setattr("fonte_opcoes.date", DataFixture)
     limpar_cache_cadeia()
     yield
     limpar_cache_cadeia()

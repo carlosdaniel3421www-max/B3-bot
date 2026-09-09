@@ -4,13 +4,15 @@ retorna todos ranqueados do sinal mais forte para o mais fraco.
 """
 
 import logging
+import math
 import time
+import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from b3_swing_analyzer import (
     baixar_dados, calcular_indicadores, avaliar_ativo,
     calcular_indicadores_curto_prazo, avaliar_ativo_curto_prazo,
     projetar_volume_dia_atual, avaliar_timeframe_horario,
-    avaliar_regime_ibov,
+    avaliar_regime_ibov, comparar_forca_relativa,
 )
 
 # Lista base: principais ativos do Ibovespa com opções líquidas na B3.
@@ -26,11 +28,11 @@ def _processar_ativo(ticker, periodo, usar_curto_prazo, projetar_volume,
                      confirmar_intradiario, regime_ibov=None) -> dict | None:
     """Processa um ativo individualmente (para paralelismo)."""
     try:
-        df = baixar_dados(ticker, periodo=periodo)
-        df = calcular_indicadores(df)  # sempre calcula o padrão (usado no gráfico)
+        df = baixar_dados(ticker, periodo=periodo, incluir_atual=projetar_volume)
 
         if projetar_volume:
             df = projetar_volume_dia_atual(df)
+        df = calcular_indicadores(df)  # volume e indicadores usam a mesma base
 
         if usar_curto_prazo:
             df = calcular_indicadores_curto_prazo(df)
@@ -41,9 +43,17 @@ def _processar_ativo(ticker, periodo, usar_curto_prazo, projetar_volume,
         motivos = list(avaliacao["motivos"])
         score = avaliacao["score"]
         direcao = avaliacao["direcao"]
+        if (direcao not in ("compra", "venda", "neutro")
+                or not math.isfinite(score) or not 0 <= score <= 10
+                or not math.isfinite(avaliacao["preco_atual"]) or avaliacao["preco_atual"] <= 0):
+            raise ValueError("Avaliacao invalida")
 
         if confirmar_intradiario and direcao != "neutro":
             horario = avaliar_timeframe_horario(ticker)
+            if horario["direcao"] in ("compra", "venda") and not (
+                math.isfinite(horario["rsi_h"]) and 0 <= horario["rsi_h"] <= 100
+            ):
+                horario = {"direcao": "indisponivel"}
             if horario["direcao"] == direcao:
                 score = min(10, score + 1)
                 motivos.append(f"✅ Gráfico de 1h confirma a mesma direção (RSI horário {horario['rsi_h']:.0f})")
@@ -54,16 +64,38 @@ def _processar_ativo(ticker, periodo, usar_curto_prazo, projetar_volume,
                     f"— cautela redobrada, sinal pode estar perdendo força intradiária"
                 )
 
-        # Filtro de regime de mercado (Ibovespa): limita o score pela direção.
-        # Ex: mercado LATERAL limita compra E venda a 7/10 (nunca ENTRAR).
+        score = min(score, avaliacao.get("teto_score", 10))
+
+        forca_relativa = None
+        # A excecao lateral apenas remove seu proprio teto, nunca soma pontos.
         if regime_ibov and direcao != "neutro":
             tetos = regime_ibov.get("tetos") or {}
             teto = tetos.get(direcao)
+            if teto is not None and (not math.isfinite(teto) or not 0 <= teto <= 10):
+                raise ValueError("Teto de regime invalido")
+            if regime_ibov.get("regime") == "lateral":
+                forca_relativa = comparar_forca_relativa(
+                    df, regime_ibov.get("historico_fechamentos"),
+                    agora=pd.Timestamp.now(tz="America/Sao_Paulo"),
+                )
+                alinhada = (forca_relativa["disponivel"]
+                            and forca_relativa["alinhada"][direcao])
+                teto = min(10 if teto is None else teto, 10 if alinhada else 7)
+                condicao = "confirmada" if alinhada else "nao confirmada"
+                motivos.append(
+                    f"Ibovespa lateral: forca relativa para {direcao} {condicao}; "
+                    f"{forca_relativa['motivo']}. Teto contextual {teto}/10, sem bonus; "
+                    "setup e demais filtros permanecem."
+                )
+            elif regime_ibov.get("regime") in ("conflito", "misto", "mixto"):
+                teto = min(7, 10 if teto is None else teto)
             if teto is not None and score > teto:
                 score = teto
                 aviso = regime_ibov.get("texto_aviso", "")
                 if aviso:
                     motivos.append(f"⚠️ Ibovespa: {aviso}")
+            if regime_ibov.get("regime") == "indisponivel":
+                motivos.append("Ibovespa indisponivel: filtro de regime nao aplicado.")
 
         return {
             "ticker": ticker,
@@ -71,6 +103,7 @@ def _processar_ativo(ticker, periodo, usar_curto_prazo, projetar_volume,
             "direcao": direcao,
             "preco": avaliacao["preco_atual"],
             "motivos": motivos,
+            "forca_relativa": forca_relativa,
             "df": df,  # mantém o dataframe para uso posterior (gráfico, stop/alvo)
         }
     except Exception as e:
@@ -88,20 +121,24 @@ def rodar_screener(watchlist=None, periodo="2y", pausa=0.3,
                  Se None, calcula automaticamente.
     Retorna lista de dicts ordenada do nível mais alto para o mais baixo.
     """
+    watchlist = WATCHLIST_PADRAO if watchlist is None else list(watchlist)
+    if not watchlist:
+        return []
+    if not math.isfinite(pausa) or pausa < 0:
+        raise ValueError("Pausa deve ser finita e nao negativa")
     if regime_ibov is None:
         regime_ibov = avaliar_regime_ibov()
-    watchlist = watchlist or WATCHLIST_PADRAO
     resultados = []
 
     if paralelo and len(watchlist) > 2:
-        with ThreadPoolExecutor(max_workers=min(6, len(watchlist))) as executor:
-            futuros = {
-                executor.submit(
+        with ThreadPoolExecutor(max_workers=min(3, len(watchlist))) as executor:
+            futuros = {}
+            for t in watchlist:
+                futuros[executor.submit(
                     _processar_ativo, t, periodo, usar_curto_prazo,
                     projetar_volume, confirmar_intradiario, regime_ibov,
-                ): t
-                for t in watchlist
-            }
+                )] = t
+                time.sleep(pausa)  # espaça as submissões pra não rate-limit
             for futuro in as_completed(futuros):
                 r = futuro.result()
                 if r:

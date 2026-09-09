@@ -27,10 +27,10 @@ def _avaliacao_forte_compra():
 
 
 def test_screener_limita_compra_em_lateral():
-    # IBOV lateral => teto compra 7. Ativo com 9/10 compra deve virar 7.
+    # Teto contextual 10 nao libera compra sem historico relativo verificado.
     regime = {
         "regime": "lateral",
-        "tetos": {"compra": 7, "venda": 7},
+        "tetos": {"compra": 10, "venda": 10},
         "texto_aviso": "Mercado sem direção — compras limitadas a 7/10",
     }
     with patch("screener.baixar_dados", return_value=_df_tendencia_alta()):

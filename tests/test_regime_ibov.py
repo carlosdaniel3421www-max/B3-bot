@@ -77,8 +77,8 @@ def test_classificar_ibov_baixa():
 def test_classificar_ibov_lateral():
     r = classificar_regime_ibov(18, 20, 22, 0.35, -0.5, -1.0, -2.0)
     assert r["regime"] == "lateral"
-    assert r["tetos"]["compra"] == 7
-    assert r["tetos"]["venda"] == 7
+    assert r["tetos"] == {"compra": 10, "venda": 10}  # condicional por ativo
+    assert "Sem confirmacao, teto 7/10" in r["texto_aviso"]
 
 
 def test_classificar_ibov_indisponivel():

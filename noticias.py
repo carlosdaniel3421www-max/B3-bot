@@ -8,7 +8,10 @@ Requer internet normal na sua máquina.
 """
 
 import feedparser
+import re
+import unicodedata
 import urllib.parse
+import requests
 
 # Palavras-chave que costumam indicar risco/eventos negativos relevantes.
 # Ajuste essa lista livremente para o seu gosto.
@@ -29,9 +32,8 @@ PALAVRAS_POSITIVAS = [
 ]
 
 # Palavras que, quando aparecem na mesma manchete, invertem ou anulam o
-# sentido de uma palavra de risco (ex: "nega recuperação judicial" é o
-# OPOSTO de estar em recuperação judicial). Detecção simples por presença
-# na frase — não é 100% à prova de falhas, mas cobre os casos mais comuns.
+# sentido de uma palavra de risco (ex: "nega recuperação judicial").
+# Desmentido não comprova ausência de risco; esta é apenas uma heurística local.
 PALAVRAS_NEGACAO = [
     " nega ", " negou ", "desmente", "desmentiu", "descarta", "descartou",
     "rejeita", "rejeitou", "arquiva", "arquivou", "improcedente",
@@ -45,15 +47,27 @@ def buscar_noticias(nome_busca: str, max_itens: int = 12):
     `nome_busca` deve ser o nome da empresa (ex: 'Petrobras'), não o ticker,
     pois o Google News indexa melhor por nome do que por código B3.
     """
-    query = urllib.parse.quote(nome_busca)
+    if type(max_itens) is not int or max_itens < 0:
+        raise ValueError("max_itens deve ser inteiro não negativo")
+    if not isinstance(nome_busca, str) or not nome_busca.strip():
+        raise ValueError("nome_busca vazio")
+    if max_itens == 0:
+        return []
+    query = urllib.parse.quote(nome_busca.strip())
     url = f"https://news.google.com/rss/search?q={query}&hl=pt-BR&gl=BR&ceid=BR:pt-419"
-    feed = feedparser.parse(url)
+    resposta = requests.get(url, timeout=15)
+    resposta.raise_for_status()
+    feed = feedparser.parse(resposta.content)
+    if feed.get("bozo"):
+        raise ValueError("Feed de notícias inválido; risco não verificado")
 
     noticias = []
     for entrada in feed.entries[:max_itens]:
+        if not isinstance(entrada.get("title"), str) or not entrada["title"].strip():
+            continue
         noticias.append({
             "titulo": entrada.title,
-            "link": entrada.link,
+            "link": entrada.get("link", ""),
             "publicado": getattr(entrada, "published", ""),
         })
     return noticias
@@ -65,27 +79,45 @@ def classificar_noticias(noticias: list) -> dict:
     positivas = []
     neutralizadas = []  # notícias que bateram palavra de risco, mas com negação (falso-positivo evitado)
 
-    for n in noticias:
-        titulo_lower = n["titulo"].lower()
-        tem_negacao = any(neg in titulo_lower for neg in PALAVRAS_NEGACAO)
-        ja_classificada = False
+    def normalizar(texto):
+        return "".join(c for c in unicodedata.normalize("NFKD", texto.casefold())
+                       if not unicodedata.combining(c))
 
+    negacoes = "|".join(re.escape(normalizar(n.strip())) for n in PALAVRAS_NEGACAO)
+    # Apenas negação imediatamente ligada ao evento; não contamina outra oração.
+    negacao_local = re.compile(
+        rf"\b(?:{negacoes}|nao|sem)(?:\s+(?:a|o|as|os|de|da|do|que|ha|houve|ter|uma|um|rumor|rumores|sobre|possibilidade))*\s*$"
+    )
+
+    def negado(prefixo):
+        match = negacao_local.search(prefixo)
+        # "Não descarta fraude" não é um desmentido da fraude.
+        return match is not None and not re.search(r"\bnao\s*$", prefixo[:match.start()])
+
+    total = 0
+    for n in noticias:
+        if not isinstance(n, dict) or not isinstance(n.get("titulo"), str) or not n["titulo"].strip():
+            continue
+        total += 1
+        titulo_lower = normalizar(n["titulo"])
+        riscos = []
+        negados = []
         for palavra in PALAVRAS_RISCO:
-            if palavra in titulo_lower:
-                if tem_negacao:
-                    neutralizadas.append({**n, "motivo": palavra})
-                else:
-                    alertas.append({**n, "motivo": palavra})
-                    ja_classificada = True
-                break
-        if ja_classificada:
-            continue  # não vai também para positivas
+            for match in re.finditer(r"\b" + re.escape(normalizar(palavra)) + r"s?\b", titulo_lower):
+                (negados if negado(titulo_lower[:match.start()]) else riscos).append(palavra)
+        if riscos:
+            alertas.append({**n, "motivo": riscos[0]})
+            continue
+        if negados:
+            neutralizadas.append({**n, "motivo": negados[0]})
+            continue  # desmentido não é recomendação positiva
         for palavra in PALAVRAS_POSITIVAS:
-            if palavra in titulo_lower:
+            matches = list(re.finditer(r"\b" + re.escape(normalizar(palavra)) + r"\b", titulo_lower))
+            if matches and not any(negado(titulo_lower[:m.start()]) for m in matches):
                 positivas.append({**n, "motivo": palavra})
                 break
 
-    return {"alertas": alertas, "positivas": positivas, "neutralizadas": neutralizadas, "total_analisado": len(noticias)}
+    return {"alertas": alertas, "positivas": positivas, "neutralizadas": neutralizadas, "total_analisado": total}
 
 
 def checar_risco_noticias(nome_busca: str) -> dict:

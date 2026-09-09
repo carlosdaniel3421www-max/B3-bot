@@ -8,7 +8,7 @@ Relatório Diário — orquestra tudo:
        - Calcula stop/alvo + tamanho de posição + opção sugerida
   5. APÓS TUDO: IA analisa os melhores ativos visualmente (gráfico) e manda
      uma mensagem separada com "por que entrar" e "por que NÃO entrar" —
-     roda sempre, não depende de estado ou filtros de score.
+     respeita o score final e os bloqueios de entrada.
 """
 
 import html
@@ -25,10 +25,15 @@ from calendario import checar_resultado_proximo
 from gestao_risco import calcular_tamanho_posicao
 from estado import carregar_estado, salvar_estado, atualizar_estado, score_suavizado
 from ai_analyzer import AIAnalyzer
-from posicoes import carregar_posicoes, formatar_gestao_todas, salvar_proposta_entrada
+from posicoes import (
+    carregar_posicoes, formatar_gestao_todas, salvar_proposta_entrada,
+    carregar_propostas, salvar_propostas,
+)
 from b3_swing_analyzer import sugerir_stop_alvo, plotar_grafico, determinar_veredito, avaliar_regime_ibov
 from trava import montar_trava, formatar_trava
 from telegram_utils import enviar_mensagem, enviar_album
+from setups import _data, classificar_setup, reutilizar_candidato
+from carteira import avaliar_carteira, avaliar_nova_operacao, formatar_resumo_carteira
 
 # Garante que os logs de erro do ai_analyzer.py (status HTTP, mensagem,
 # stacktrace) apareçam no console/log do GitHub Actions. Não interfere em
@@ -56,11 +61,10 @@ def validar_configuracao() -> None:
     if not getattr(config, "TELEGRAM_CHAT_ID", "") or "COLOQUE" in str(getattr(config, "TELEGRAM_CHAT_ID", "")):
         faltando.append("TELEGRAM_CHAT_ID (seu chat id no Telegram)")
 
-    # Gemini é obrigatório para a análise de IA; sem ele o relatório ainda roda,
-    # mas a segunda opinião fica indisponível — avisamos mas não bloqueamos.
+    # Sem Gemini, o Nemotron ainda pode analisar o contexto textual.
     sem_gemini = not getattr(config, "GEMINI_API_KEY", "")
     if sem_gemini:
-        logging.warning("GEMINI_API_KEY ausente — a análise de IA (segunda opinião) ficará indisponível.")
+        logging.warning("GEMINI_API_KEY ausente: leitura visual indisponivel; Nemotron textual depende de CARLOS.")
 
     # Nemotron (CARLOS) é opcional — fallback silencioso para Gemini puro.
     sem_nemotron = not getattr(config, "CARLOS", "")
@@ -87,6 +91,81 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
     direcao = resultado["direcao"]
 
     veredito = determinar_veredito(score, direcao)
+    resultado["entrada_permitida"] = veredito["veredito"] == "ENTRAR"
+    resultado["motivo_bloqueio"] = "" if resultado["entrada_permitida"] else veredito["descricao"]
+    risco_noticias = {}
+    aviso_calendario = ""
+    cancelamento = ""
+    resultado["estado_entrada"] = "aguardar"
+    plano_setup = None
+    plano_reutilizado = False
+    if direcao in ("compra", "venda") and (score >= nivel_detalhe or resultado["entrada_permitida"]):
+        nome_empresa = config.NOME_EMPRESA.get(ticker, ticker)
+        risco_noticias = checar_risco_noticias(nome_empresa)
+        if risco_noticias["bloquear_entrada"]:
+            cancelamento = f"notícia de risco: {risco_noticias['alertas'][0]['motivo']}"
+        else:
+            resultado_trimestral = checar_resultado_proximo(ticker, config.DIAS_MINIMOS_ANTES_RESULTADO)
+            if resultado_trimestral.get("info_disponivel") is False:
+                aviso_calendario = "Calendario de resultados indisponivel: confirme a agenda antes de operar."
+            if resultado_trimestral["tem_resultado_proximo"]:
+                cancelamento = (
+                    f"resultado trimestral em {resultado_trimestral['dias_ate_resultado']} dia(s) "
+                    f"({resultado_trimestral['data_resultado']})"
+                )
+    if resultado["entrada_permitida"] and not cancelamento and config.EXIGIR_SETUP:
+        plano_setup = classificar_setup(resultado["df"], direcao)
+        if plano_setup["estado"] != "candidato":
+            proposta = carregar_propostas().get(ticker.upper(), {})
+            if (isinstance(proposta, dict) and proposta.get("estado_entrada") == "candidato"
+                    and proposta.get("direcao") == direcao):
+                anterior = reutilizar_candidato(
+                    proposta.get("plano_setup"), resultado["df"], direcao, date.today(),
+                )
+                if anterior is not None:
+                    plano_setup = anterior
+                    plano_reutilizado = True
+        if plano_setup["estado"] == "candidato":
+            try:
+                idade = (date.today() - _data(plano_setup.get("data_sinal"))).days
+                if not 0 <= idade <= 4:
+                    cancelamento = "Setup expirado ou com data de sinal futura."
+            except (ValueError, TypeError, OverflowError):
+                cancelamento = "Setup com data de sinal invalida."
+        resultado["plano_setup"] = plano_setup
+        if plano_setup["estado"] != "candidato":
+            cancelamento = "Setup: " + plano_setup["motivo"]
+        elif not cancelamento:
+            carteira_atual = carregar_posicoes()
+            resultado["carteira_atual"] = carteira_atual
+            risco_carteira = avaliar_carteira(
+                carteira_atual, config.CAPITAL_DISPONIVEL,
+                config.RISCO_MAX_CARTEIRA_PCT, config.EXPOSICAO_MAX_SETOR_PCT,
+                config.SETORES, date.today().isoformat(),
+            )
+            if not risco_carteira["permite_nova_operacao"]:
+                cancelamento = "Carteira incompleta ou fora dos limites; consulte /carteira."
+            elif ticker in carteira_atual:
+                cancelamento = "Ja existe posicao neste ativo; nao acumular uma segunda proposta."
+            else:
+                resultado["estado_entrada"] = "candidato"
+                veredito = {"veredito": "CANDIDATO", "emoji": "🟡",
+                            "descricao": "Setup identificado: aguarde gatilho e valide risco antes de operar."}
+    if cancelamento:
+        resultado["entrada_permitida"] = False
+        resultado["motivo_bloqueio"] = cancelamento
+        veredito = {"veredito": "EVITAR", "emoji": "🔴", "descricao": "Entrada cancelada pelos filtros de risco."}
+    resultado["veredito"] = veredito
+    resultado["noticias"] = risco_noticias.get("noticias", [])
+
+    if not resultado["entrada_permitida"]:
+        try:
+            propostas = carregar_propostas()
+            if ticker.upper() in propostas:
+                del propostas[ticker.upper()]
+                salvar_propostas(propostas)
+        except Exception as e:
+            logging.warning("Falha ao remover proposta de %s: %s", ticker, e)
 
     if direcao == "neutro":
         palavra = "NEUTRO"
@@ -101,41 +180,38 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
         f"<i>{veredito['descricao']}</i>"
     )
     motivos_txt = "\n".join(f"  • {m}" for m in resultado["motivos"])
+    if aviso_calendario:
+        motivos_txt += "\n  " + aviso_calendario
 
-    if direcao == "neutro" or score < nivel_detalhe:
+    if cancelamento:
+        return (
+            f"{cabecalho}\n{motivos_txt}\n"
+            f"  🚫 <b>CANCELADO</b> — {html.escape(cancelamento, quote=False)}"
+        )
+
+    # Candidato precisa persistir o plano mesmo com detalhes visuais reduzidos.
+    if direcao == "neutro" or (score < nivel_detalhe and not plano_setup):
         return f"{cabecalho}\n{motivos_txt}"
 
-    # --- Alerta NOVO: checa notícias e calendário ---
-    nome_empresa = config.NOME_EMPRESA.get(ticker, ticker)
-    risco_noticias = checar_risco_noticias(nome_empresa)
-
-    if risco_noticias["bloquear_entrada"]:
-        motivo = risco_noticias["alertas"][0]["motivo"]
-        return (
-            f"{cabecalho}\n{motivos_txt}\n"
-            f"  🚫 <b>CANCELADO</b> — notícia de risco: {motivo}"
-        )
-
-    resultado_trimestral = checar_resultado_proximo(ticker, config.DIAS_MINIMOS_ANTES_RESULTADO)
-    if resultado_trimestral["tem_resultado_proximo"]:
-        return (
-            f"{cabecalho}\n{motivos_txt}\n"
-            f"  🚫 <b>CANCELADO</b> — resultado trimestral em "
-            f"{resultado_trimestral['dias_ate_resultado']} dia(s) ({resultado_trimestral['data_resultado']})"
-        )
-
     df = resultado["df"]
-    stop_alvo = sugerir_stop_alvo(df, direcao, atr_mult=atr_mult,
-                                   risco_retorno=risco_retorno,
-                                   risco_maximo_atr_mult=risco_maximo_atr_mult)
+    stop_alvo = ({"preco_entrada": plano_setup["gatilho"], "stop": plano_setup["stop"], "alvo": plano_setup["alvo"]}
+                 if plano_setup and plano_setup["estado"] == "candidato" else sugerir_stop_alvo(df, direcao, atr_mult=atr_mult,
+                                    risco_retorno=risco_retorno,
+                                    risco_maximo_atr_mult=risco_maximo_atr_mult))
+    resultado["plano_tecnico"] = stop_alvo
 
     # Guarda a proposta de entrada: você decide se registra (respondendo
     # "/registrar TICKER" no Telegram) ou ignora. Nada é registrado sozinho.
-    try:
-        salvar_proposta_entrada(ticker, direcao, resultado["preco"],
-                                stop_alvo["stop"], stop_alvo["alvo"])
-    except Exception as e:
-        logging.warning("Falha ao salvar proposta de %s: %s", ticker, e)
+    if resultado["entrada_permitida"] and not plano_reutilizado:
+        try:
+            if plano_setup:
+                salvar_proposta_entrada(ticker, direcao, stop_alvo["preco_entrada"],
+                                        stop_alvo["stop"], stop_alvo["alvo"], plano_setup=plano_setup)
+            else:
+                salvar_proposta_entrada(ticker, direcao, resultado["preco"],
+                                        stop_alvo["stop"], stop_alvo["alvo"])
+        except Exception as e:
+            logging.warning("Falha ao salvar proposta de %s: %s", ticker, e)
 
     opcao = sugerir_parametros_opcao_com_preco(
         resultado["preco"], direcao, ticker,
@@ -167,12 +243,9 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
             f"({posicao['pct_capital_em_risco']}% do capital)\n"
         )
 
-    if opcao.get("premio"):
-        linha_premio = f"R$ {opcao['premio']:.2f} (preço real)"
-        if opcao.get("fonte") == "oplab":
-            linha_premio += " — OpLab"
-        else:
-            linha_premio += " — estimativa teórica"
+    if opcao.get("premio") is not None:
+        origem = "cotacao OpLab; confirme execucao" if opcao.get("fonte") == "oplab" else "estimativa teorica, nao cotacao"
+        linha_premio = f"R$ {opcao['premio']:.2f} — {origem}"
     else:
         linha_premio = "estimativa teórica (sem cotação real)"
 
@@ -181,11 +254,32 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
         f"venc. {opcao['vencimento_sugerido']} — {explicacao_opcao}\n"
         f"  <i>Prêmio: {linha_premio}</i>\n"
         f"  ⚠️ Confirme liquidez antes de operar.\n"
-        f"  ✅ Se ENTRAR, registre: responda <b>/registrar {ticker}</b> no chat."
     )
+    if plano_setup:
+        plano += (f"  Setup: {plano_setup['setup']} | Gatilho: R$ {plano_setup['gatilho']:.2f}\n"
+                  f"  Data do sinal: {plano_setup['data_sinal']} | Alvo "
+                  f"{'teorico 2R' if plano_setup['alvo_teorico'] else 'em barreira historica'}\n"
+                  "  Validade: ate 4 dias corridos apos o sinal, somente sessao negociavel.\n")
+        risco_novo = avaliar_nova_operacao(
+            resultado["carteira_atual"],
+            {"ticker": ticker, "direcao": direcao, "preco_entrada": stop_alvo["preco_entrada"],
+             "stop": stop_alvo["stop"], "quantidade": posicao.get("quantidade_acoes", 0),
+             "data_entrada": date.today().isoformat()},
+            config.CAPITAL_DISPONIVEL, config.RISCO_MAX_CARTEIRA_PCT,
+            config.EXPOSICAO_MAX_SETOR_PCT, config.SETORES, date.today().isoformat(),
+        )
+        if not risco_novo["permite_nova_operacao"]:
+            plano += "  Acao com a quantidade sugerida excede limites ou tem dados incompletos; reduza/reavalie antes de operar.\n"
+    if resultado["estado_entrada"] == "candidato":
+        plano += (f"  Confira gatilho com /gatilho {ticker} PRECO_ATUAL ATR DATA_COTACAO.\n"
+                  "  Preco informado manualmente nao comprova execucao nem atualidade.\n")
+    elif resultado["entrada_permitida"]:
+        plano += f"  ✅ Se ENTRAR, registre: responda <b>/registrar {ticker}</b> no chat."
+    else:
+        plano += "  ⏳ Plano de referência: aguarde confirmação antes de entrar."
 
     if risco_noticias.get("positivas"):
-        plano += f"\n  ✅ {risco_noticias['positivas'][0]['titulo']}"
+        plano += f"\n  ✅ {html.escape(risco_noticias['positivas'][0]['titulo'], quote=False)}"
 
     return plano
 
@@ -196,7 +290,7 @@ def _montar_analisador_ia() -> AIAnalyzer | None:
         return None
 
     api_key = getattr(config, "GEMINI_API_KEY", "")
-    if not api_key:
+    if not api_key and not getattr(config, "CARLOS", ""):
         return None
 
     nemotron_key = getattr(config, "CARLOS", "")
@@ -216,8 +310,8 @@ def _montar_analisador_ia() -> AIAnalyzer | None:
 def rodar_analise_ia(resultados: list, arquivo_estado: str, regime_ibov: dict = None) -> str:
     """
     Roda a IA (Gemini) em todos os ativos com score >= SCORE_MINIMO_IA e monta
-    uma mensagem consolidada de segunda opinião. Sempre roda, independente de
-    estado ou alertas anteriores.
+    uma mensagem consolidada de segunda opinião, respeitando os bloqueios de
+    entrada, independente de estado ou alertas anteriores.
 
     A IA recebe: ticker, preço, EMA/SMA21, EMA/SMA200, RSI, MACD, ATR, volume,
     suporte, resistência, score, direção, motivos do score, notícias completas
@@ -235,6 +329,7 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str, regime_ibov: dict = 
     candidatos = [
         r for r in resultados
         if r["score"] >= SCORE_MINIMO_IA and r["direcao"] != "neutro"
+        and r.get("entrada_permitida", True)
     ]
     if not candidatos:
         return "🤖 <b>Análise da IA:</b> Nenhum ativo com sinal suficiente para análise hoje."
@@ -253,7 +348,8 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str, regime_ibov: dict = 
             nome_empresa = config.NOME_EMPRESA.get(ticker, ticker)
 
             try:
-                noticias_ativo = checar_risco_noticias(nome_empresa).get("noticias", [])
+                noticias_ativo = (r["noticias"] if "noticias" in r
+                                  else checar_risco_noticias(nome_empresa).get("noticias", []))
             except Exception as e:
                 logging.warning("Falha ao buscar notícias de %s para a IA: %s", ticker, e, exc_info=True)
                 noticias_ativo = []
@@ -278,6 +374,11 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str, regime_ibov: dict = 
                 extra_context={
                     "regime_ibov": (regime_ibov or {}).get("texto_curto", ""),
                     "aviso_ibov": (regime_ibov or {}).get("texto_aviso", ""),
+                    "estado_entrada": r.get("estado_entrada", "sinal_tecnico"),
+                    "setup": r.get("plano_setup"),
+                    "forca_relativa": r.get("forca_relativa"),
+                    "prazo_opcoes_dias_corridos": [config.OPCOES_MIN_DIAS_CORRIDOS, config.OPCOES_MAX_DIAS_CORRIDOS],
+                    "instrucao": "Candidato nao e entrada executada. Nao libere compra/venda a mercado antes do gatilho e da conferencia da carteira.",
                 },
             )
         except Exception as e:
@@ -300,7 +401,7 @@ def rodar_analise_ia(resultados: list, arquivo_estado: str, regime_ibov: dict = 
                 motivo_nemotron = getattr(analisador, "ultimo_erro_nemotron", None)
                 if motivo_nemotron:
                     motivo_curto = motivo_nemotron.split("): ")[-1][:120]
-                    linha_ia += f"\n<i>(Nemotron: {motivo_curto})</i>"
+                    linha_ia += f"\n<i>(Nemotron: {html.escape(motivo_curto, quote=False)})</i>"
             blocos_ia.append(
                 f"<b>{linha_ia}\n"
                 f"{analisador.format_telegram_message(resultado_ia)}"
@@ -337,13 +438,19 @@ def _formatar_veredito_trava(resposta_ia) -> str:
 
     # Veredito com emoji
     if fazer is True:
-        veredito = "✅ MONTA A TRAVA"
+        veredito = "✅ IA FAVORAVEL (opiniao, nao ordem)"
     elif fazer is False:
         veredito = "❌ NÃO MONTA"
     else:
         veredito = "⚠️ AVALIAR"
 
-    certeza_txt = f" (certeza {certeza}%)" if certeza else ""
+    certeza_txt = ""
+    try:
+        valor = float(certeza)
+        if not isinstance(certeza, bool) and 0 <= valor <= 100:
+            certeza_txt = f" (confianca subjetiva {valor:g}%, nao calibrada)"
+    except (TypeError, ValueError):
+        pass
     linhas = [f"  <b>{veredito}</b>{certeza_txt}"]
     if recomendacao:
         linhas.append(f"  📋 {html.escape(str(recomendacao), quote=False)}")
@@ -369,6 +476,7 @@ def rodar_analise_trava_ia(resultados: list, regime_ibov: dict = None) -> str:
     candidatos = [
         r for r in resultados
         if r["score"] >= 8 and r["direcao"] in ("compra", "venda")
+        and r.get("entrada_permitida", True)
     ]
     if not candidatos:
         return ""
@@ -384,12 +492,43 @@ def rodar_analise_trava_ia(resultados: list, regime_ibov: dict = None) -> str:
 
         try:
             cadeia = buscar_cadeia_estruturada(ticker)
-            trava = montar_trava(preco, direcao, cadeia_real=cadeia, ticker=ticker)
+            if config.EXIGIR_SETUP:
+                from selecao_trava import selecionar_trava_por_tese
+                selecao = selecionar_trava_por_tese(
+                    cadeia, preco, direcao, r["plano_tecnico"]["alvo"],
+                )
+                trava = selecao["trava"]
+                if trava is None:
+                    blocos.append(f"{html.escape(ticker)}: sem trava adequada a tese. {html.escape(selecao['motivo'])}")
+                    continue
+                candidato = {"ticker": ticker, "tipo_operacao": "trava", "direcao": direcao,
+                             "preco_entrada": trava["custo_liquido"], "quantidade": trava["contratos"],
+                             "vencimento": trava["vencimento_data"], "data_entrada": date.today().isoformat()}
+                risco = avaliar_nova_operacao(
+                    carregar_posicoes(), candidato, config.CAPITAL_DISPONIVEL,
+                    config.RISCO_MAX_CARTEIRA_PCT, config.EXPOSICAO_MAX_SETOR_PCT,
+                    config.SETORES, date.today().isoformat(),
+                )
+                if not risco["permite_nova_operacao"]:
+                    blocos.append(f"{html.escape(ticker)}: trava bloqueada pelos limites/dados da carteira; consulte /carteira.")
+                    continue
+            else:
+                trava = montar_trava(preco, direcao, cadeia_real=cadeia, ticker=ticker,
+                                    permitir_estimativa=False)
         except Exception as e:
             logging.warning("Falha ao montar trava real de %s: %s", ticker, e)
+            blocos.append(f"{html.escape(ticker)}: sem estrutura real elegivel entre "
+                          f"{config.OPCOES_MIN_DIAS_CORRIDOS} e {config.OPCOES_MAX_DIAS_CORRIDOS} dias corridos. "
+                          "Nao substituir por vencimento mais distante ou simulacao.")
             continue
 
         bloco_trava = formatar_trava(trava, preco)
+        if config.EXIGIR_SETUP:
+            from cenarios_trava import analisar_cenarios_trava, formatar_cenarios_trava
+            bloco_trava += "\n" + formatar_cenarios_trava(analisar_cenarios_trava(
+                trava, preco, r["plano_tecnico"]["alvo"], r["plano_tecnico"]["stop"],
+            ))
+            bloco_trava += "\nEstrutura candidata: depende do gatilho na acao e de novas cotacoes das duas pernas."
 
         # --- IA exclusiva sobre a trava ---
         opiniao_ia = ""
@@ -407,22 +546,27 @@ def rodar_analise_trava_ia(resultados: list, regime_ibov: dict = None) -> str:
                 prompt_trava = (
                     f"Você é um especialista em opções da B3. Avalie EXCLUSIVAMENTE esta TRAVA "
                     f"para {ticker}.\n\n"
+                    "Estrutura CANDIDATA: nao e autorizacao de ordem. "
+                    "Depende de gatilho, cotacoes atualizadas e limites da carteira.\n"
                     f"CONTEXTO (importante — não confunda a data):\n"
                     f"- Hoje é {hoje}.\n"
                     f"- O vencimento desta trava é {venc_data}, que fica a "
-                    f"{dias_uteis} DIAS ÚTEIS da data de hoje (cerca de 1-2 meses, "
-                    f"o próximo vencimento mensal normal da B3 — NÃO são anos).\n"
+                    f"{dias_uteis} dias uteis segundo os dados da estrutura. "
+                    f"Dias CORRIDOS ate o vencimento: {trava.get('dias_corridos', 'N/A')}. "
+                    f"Politica de novas entradas: {config.OPCOES_MIN_DIAS_CORRIDOS} a "
+                    f"{config.OPCOES_MAX_DIAS_CORRIDOS} dias corridos, nunca mais de um mes. "
+                    "O horizonte da tese deve ser menor que o prazo restante; nao recomendar esperar meses. "
+                    f"Se a data nao estiver informada, nao deduza um vencimento.\n"
                     f"{contexto_ibov}"
                     f"- Preço atual do ativo: R$ {preco:.2f}. Direção do robô: {direcao}.\n\n"
                     f"{bloco_trava}\n\n"
                     "Avalie se a trava vale a pena: custo, risco/retorno, liquidez e "
-                    "realismo do prazo (confirme que o vencimento é o próximo mensal).\n"
+                    "realismo do prazo informado, sem presumir que seja o proximo mensal.\n"
                     "REGRAS IMPORTANTES:\n"
                     "- Sobre LIQUIDEZ: use APENAS os dados de negócios/volume que aparecem "
-                    "na trava acima (linha 'Liquidez'). NÃO invente nem especule que um "
-                    "strike 'não tem liquidez' se os dados mostram negócios > 0.\n"
-                    "- Se os dados mostram negócios e volume reais, considere a trava "
-                    "executável.\n"
+                    "na trava acima. Negocios historicos nao garantem liquidez ou execucao atual.\n"
+                    "- Exija conferencia de bid/ask, quantidade e ambas as pernas. "
+                    "Premios estimados nao sao ofertas executaveis; risco limitado nao e risco baixo.\n"
                     "- Considere também o REGIME DO IBOVESPA acima: se o mercado está "
                     "lateral/choppy, pondere que rompimentos tendem a falhar.\n"
                     "- Baseie o veredito principalmente em: custo vs ganho máximo, "
@@ -467,48 +611,29 @@ def rodar_analise_trava_ia(resultados: list, regime_ibov: dict = None) -> str:
         return ""
 
     cabecalho = (
-        f"🔒 <b>Trava de opções com preços reais — {hoje}</b>\n"
+        f"🔒 <b>Trava de opções — {hoje}</b>\n"
         f"Estrutura de duas pernas (risco limitado) para os ativos com sinal forte, "
-        f"com prêmios do último pregão (opcoes.net.br) e leitura exclusiva da IA.\n\n"
+        f"com referencia de fechamento quando disponivel, ou estimativa teorica identificada. "
+        f"Nao sao precos executaveis garantidos.\n\n"
     )
     return cabecalho + "\n\n".join(blocos)
 
 
 def montar_gestao_posicoes(resultados: list) -> str:
     """
-    Monta o bloco "GESTÃO DE POSIÇÕES ABERTAS" usando os preços do screener
-    (quando o ativo está na watchlist) e baixando os demais via yfinance.
+    Monta a gestao com fechamentos nao ajustados, como /status e /posicoes.
+    Historico ajustado do screener nao e cotacao para limites registrados.
     Retorna string vazia se não houver posições abertas registradas.
     """
     posicoes = carregar_posicoes()
     if not posicoes:
         return ""
 
-    precos = {r["ticker"]: float(r["preco"]) for r in resultados}
-
-    faltantes = [t for t in posicoes if t not in precos]
-    if faltantes:
-        try:
-            import pandas as pd
-            import yfinance as yf
-
-            df = yf.download(
-                [f"{t}.SA" for t in faltantes], period="5d", interval="1d",
-                progress=False, group_by="ticker",
-            )
-            for t in faltantes:
-                try:
-                    d = df.get(t) or df.get(f"{t}.SA")
-                    if d is None:
-                        continue
-                    if isinstance(d.columns, pd.MultiIndex):
-                        d.columns = d.columns.get_level_values(0)
-                    d = d.rename(columns=str.lower)
-                    precos[t] = float(d["close"].iloc[-1])
-                except Exception:
-                    precos[t] = None
-        except Exception as e:
-            logging.warning("Falha ao buscar preços das posições abertas: %s", e)
+    acoes = {t: p for t, p in posicoes.items() if p.get("tipo_operacao") != "trava"}
+    precos = {}
+    if acoes:
+        from telegram_bot import _precos_posicoes
+        precos = _precos_posicoes(acoes)
 
     return formatar_gestao_todas(posicoes, precos)
 
@@ -523,7 +648,7 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
 
     validar_configuracao()
 
-    watchlist = watchlist or config.WATCHLIST
+    watchlist = config.WATCHLIST if watchlist is None else watchlist
     periodo = periodo or config.PERIODO_HISTORICO
     nivel_detalhe = nivel_detalhe if nivel_detalhe is not None else config.NIVEL_DETALHE
     risco_maximo_atr_mult = risco_maximo_atr_mult if risco_maximo_atr_mult is not None else config.RISCO_MAXIMO_ATR_MULT
@@ -558,12 +683,11 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
     estado = carregar_estado(arquivo_estado)
     blocos = []
     for r in resultados:
-        # Guarda o score bruto do dia (usado pela IA) antes da suavização
+        # Score atual do screener, já com os filtros, antes da média.
         r["score_bruto"] = r["score"]
-        # Suaviza o score com os últimos dias (evita sinal 10/10 virar 4/10
-        # no dia seguinte por oscilação comum do mercado)
-        score_estavel = score_suavizado(estado, r["ticker"], r["score"])
-        r["score"] = score_estavel
+        score_estavel = score_suavizado(estado, r["ticker"], r["score_bruto"], r["direcao"])
+        # A média nunca pode desfazer tetos de risco ou promover um sinal fraco.
+        r["score"] = min(score_estavel, r["score_bruto"])
         r["motivos"] = r.get("motivos", [])
 
     # Reordena pelo score SUAVIZADO (decrescente), com tiebreaker pelo bruto
@@ -588,22 +712,17 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
     try:
         from diario_sinais import registrar_sinal, atualizar_resultados
         for r in resultados:
-            if r["score"] >= 8 and r["direcao"] in ("compra", "venda"):
+            if r["entrada_permitida"] and r.get("estado_entrada") != "candidato":
                 registrar_sinal(r["ticker"], r["direcao"], r["score"], r["preco"])
-        # Busca preços atuais dos ativos da watchlist para avaliar sinais antigos
-        precos_diario = {}
-        for t in config.WATCHLIST:
-            try:
-                preco = float(rodar_screener([t], periodo="5d")[0]["preco"])
-                precos_diario[t] = preco
-            except Exception:
-                pass
-        atualizar_resultados(precos_diario)
+        # O diario busca o fechamento da sessao-alvo, nao a cotacao atual.
+        atualizar_resultados({})
     except Exception as e:
         logging.warning("Falha ao atualizar diário de sinais: %s", e)
 
 
     cabecalho_msg = f"📊 <b>{titulo} — {hoje}</b>\n"
+    cabecalho_msg += (f"Novas opcoes: {config.OPCOES_MIN_DIAS_CORRIDOS} a "
+                     f"{config.OPCOES_MAX_DIAS_CORRIDOS} dias corridos ate vencimento.\n")
     if nota_extra:
         cabecalho_msg += f"{nota_extra}\n"
 
@@ -613,14 +732,18 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
         aviso_ibov = regime_ibov.get("texto_aviso", "")
         if aviso_ibov:
             cabecalho_msg += f"⚠️ {aviso_ibov}\n"
+    else:
+        cabecalho_msg += "Ibovespa indisponivel: filtro de mercado nao aplicado nesta leitura.\n"
 
     # --- Resumo executivo de vereditos no topo ---
-    contagem = {"ENTRAR": [], "AGUARDAR": [], "EVITAR": [], "SEM SINAL": []}
+    contagem = {"ENTRAR": [], "CANDIDATO": [], "AGUARDAR": [], "EVITAR": [], "SEM SINAL": []}
     for r in resultados:
-        v = determinar_veredito(r["score"], r["direcao"])["veredito"]
+        v = r["veredito"]["veredito"]
         contagem[v].append(r["ticker"])
 
     resumo_vereditos = []
+    if contagem["CANDIDATO"]:
+        resumo_vereditos.append(f"🟡 <b>CANDIDATOS (aguardar gatilho):</b> {', '.join(contagem['CANDIDATO'])}")
     if contagem["ENTRAR"]:
         resumo_vereditos.append(f"🟢 <b>ENTRAR:</b> {', '.join(contagem['ENTRAR'])}")
     if contagem["AGUARDAR"]:
@@ -635,6 +758,11 @@ def gerar_e_enviar_relatorio(watchlist=None, periodo=None, nivel_detalhe=None,
     # --- Gestão de posições abertas: o que fazer com o que já está operando ---
     logging.info("Montando gestão de posições abertas...")
     gestao_posicoes = montar_gestao_posicoes(resultados)
+    if config.EXIGIR_SETUP:
+        cabecalho_msg += "\n" + formatar_resumo_carteira(avaliar_carteira(
+            carregar_posicoes(), config.CAPITAL_DISPONIVEL, config.RISCO_MAX_CARTEIRA_PCT,
+            config.EXPOSICAO_MAX_SETOR_PCT, config.SETORES, date.today().isoformat(),
+        )) + "\n"
     if gestao_posicoes:
         cabecalho_msg += "\n" + gestao_posicoes + "\n"
 

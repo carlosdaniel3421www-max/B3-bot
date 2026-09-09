@@ -6,7 +6,7 @@ IMPORTANTE: a B3 não tem uma fonte gratuita e confiável de cadeia de opções
 (strikes, vencimentos, gregas, liquidez). Este módulo tem duas frentes:
 
 1. `sugerir_parametros_opcao()` — dá a lógica de QUAL strike/vencimento
-   procurar (ex: "PETR4, CALL, strike ~R$ 34, vencimento ~35-45 dias"),
+   procurar (ex: "PETR4, CALL, strike ~R$ 34, vencimento 14-30 dias corridos"),
    mesmo sem cadeia real. Você usa isso para buscar manualmente no home
    broker ou na OpLab.
 
@@ -20,46 +20,57 @@ IMPORTANTE: a B3 não tem uma fonte gratuita e confiável de cadeia de opções
 """
 
 import logging
+import math
+from datetime import date
 
 import requests
+
+from fonte_opcoes import _faixa_dias_corridos
 
 logger = logging.getLogger(__name__)
 
 
 def _buscar_premio_oplab_para_strike(ticker, token, tipo_opcao, strike_alvo,
-                                     dias_min=25, dias_max=45):
+                                     dias_min=None, dias_max=None):
     """Busca o prêmio real da opção mais próxima do strike alvo na OpLab."""
     try:
         cadeia = buscar_cadeia_oplab(ticker, token)
         if not isinstance(cadeia, list) or not cadeia:
             return None
-        candidatas = [
-            o for o in cadeia
-            if str(o.get("type", "")).upper() == tipo_opcao
-            and dias_min <= o.get("days_to_maturity", 0) <= dias_max
-        ]
-        if not candidatas:
+        melhor = escolher_melhor_opcao(
+            cadeia, strike_alvo, tipo_opcao,
+            dias_corridos_min=dias_min, dias_corridos_max=dias_max)
+        if not melhor:
             return None
-        candidatas.sort(key=lambda o: abs(o.get("strike", 0) - strike_alvo))
-        melhor = candidatas[0]
-        premio = melhor.get("bid") or melhor.get("ask") or melhor.get("premium")
+        # A sugestao e de COMPRA de call/put: custo de entrada e o ask, nao bid.
+        premio = melhor.get("ask")
         if premio:
             return {
                 "premio_real": float(premio),
                 "strike_real": melhor.get("strike"),
                 "liquidez_ok": (melhor.get("volume") or 0) > 0,
+                "vencimento": melhor.get("due_date"),
+                "dias_corridos": (date.fromisoformat(str(melhor["due_date"])[:10]) - date.today()).days,
             }
     except Exception as e:
         logger.warning("Falha ao buscar prêmio real na OpLab (%s): %s", ticker, e)
     return None
 
 
-def sugerir_parametros_opcao(preco_atual: float, direcao: str, prazo_dias_min=25, prazo_dias_max=45) -> dict:
+def sugerir_parametros_opcao(preco_atual: float, direcao: str, prazo_dias_min=None, prazo_dias_max=None) -> dict:
     """
     Sugere o TIPO de strike/vencimento a procurar, com base em regras
     comuns de swing trade com opções (evitar opções muito próximas do
-    vencimento por causa do theta decay).
+    vencimento por causa do theta decay). Prazos em dias corridos, por
+    padrao da politica (14..30); personalizacao apenas estreita a janela.
     """
+    prazo_dias_min, prazo_dias_max = _faixa_dias_corridos(prazo_dias_min, prazo_dias_max)
+    if (direcao not in ("compra", "venda")
+            or not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                       and math.isfinite(v) and v > 0
+                       for v in (preco_atual, prazo_dias_min, prazo_dias_max))
+            or prazo_dias_min > prazo_dias_max):
+        raise ValueError("Preco, direcao ou faixa de vencimento invalidos")
     tipo_opcao = "CALL" if direcao == "compra" else "PUT"
 
     # Regra simples: strike levemente OTM (fora do dinheiro) para dar
@@ -78,9 +89,9 @@ def sugerir_parametros_opcao(preco_atual: float, direcao: str, prazo_dias_min=25
         "vencimento_sugerido": f"entre {prazo_dias_min} e {prazo_dias_max} dias corridos",
         "motivo": (
             "Strike levemente fora do dinheiro busca mais alavancagem com "
-            "prêmio mais barato; vencimento de 25-45 dias reduz o impacto "
-            "do decaimento de theta durante o swing trade, mas ainda dá "
-            "tempo pro movimento acontecer."
+            f"premio mais barato; vencimento de {prazo_dias_min}-{prazo_dias_max} "
+            "dias corridos respeita o limite de 30 dias e evita novas entradas "
+            "nas duas semanas finais. Theta ainda pode causar perdas."
         ),
         "observacao": (
             "Confirme liquidez (volume/contratos em aberto) da opção antes "
@@ -99,24 +110,47 @@ def buscar_cadeia_oplab(ticker: str, token: str) -> list:
     """
     url = f"https://api.oplab.com.br/v3/market/options/{ticker.upper()}"
     headers = {"Access-Token": token}
-    resposta = requests.get(url, headers=headers)
+    resposta = requests.get(url, headers=headers, timeout=20)
     resposta.raise_for_status()
     return resposta.json()
 
 
-def escolher_melhor_opcao(cadeia: list, strike_alvo: float, tipo_opcao: str, dias_min: int, dias_max: int) -> dict:
+def escolher_melhor_opcao(cadeia: list, strike_alvo: float, tipo_opcao: str,
+                          dias_min: int = 1, dias_max: int = 60, *,
+                          dias_corridos_min=None, dias_corridos_max=None) -> dict:
     """
     Dado o retorno de buscar_cadeia_oplab, filtra pelo tipo e vencimento
     desejado e escolhe a opção com strike mais próximo do alvo sugerido,
-    priorizando liquidez.
+    priorizando liquidez. Exige due_date; days_to_maturity nao comprova prazo.
+    Nesta API OpLab dias_min/dias_max continuam sendo dias corridos adicionais,
+    nao DU. Limites opcionais so estreitam a politica (14..30 por padrao).
     NOTA: ajuste os nomes de campos (ex: 'strike', 'due_date', 'type',
     'volume') conforme o formato real retornado pela OpLab.
     """
-    candidatas = [
-        o for o in cadeia
-        if o.get("type", "").upper() == tipo_opcao
-        and dias_min <= o.get("days_to_maturity", 0) <= dias_max
-    ]
+    try:
+        minimo, maximo = _faixa_dias_corridos(dias_corridos_min, dias_corridos_max)
+    except ValueError:
+        return {}
+    candidatas = []
+    hoje = date.today()
+    for o in cadeia:
+        if not isinstance(o, dict) or str(o.get("type", "")).upper() != tipo_opcao.upper():
+            continue
+        valores = [o.get(c) for c in ("strike", "ask", "volume")]
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                   and math.isfinite(v) and v > 0 for v in valores):
+            continue
+        try:
+            dias = (date.fromisoformat(str(o.get("due_date"))[:10]) - hoje).days
+        except ValueError:
+            continue
+        if not minimo <= dias <= maximo or not dias_min <= dias <= dias_max:
+            continue
+        bid = o.get("bid")
+        if bid is not None and (not isinstance(bid, (int, float)) or isinstance(bid, bool)
+                                or not math.isfinite(bid) or bid < 0 or bid > o["ask"]):
+            continue
+        candidatas.append(o)
     if not candidatas:
         return {}
 
@@ -125,7 +159,7 @@ def escolher_melhor_opcao(cadeia: list, strike_alvo: float, tipo_opcao: str, dia
 
 
 def sugerir_parametros_opcao_com_preco(preco_atual: float, direcao: str, ticker: str,
-                                        token: str = "", prazo_dias_min=25, prazo_dias_max=45) -> dict:
+                                        token: str = "", prazo_dias_min=None, prazo_dias_max=None) -> dict:
     """
     Versão "inteligente" de sugestão de opção:
     - Se `token` (OpLab) for informado, tenta buscar o prêmio real da opção
@@ -135,6 +169,7 @@ def sugerir_parametros_opcao_com_preco(preco_atual: float, direcao: str, ticker:
     Retorna sempre o mesmo schema de `sugerir_parametros_opcao`, adicionando
     `premio` (float) e `fonte` ("oplab" | "estimativa").
     """
+    prazo_dias_min, prazo_dias_max = _faixa_dias_corridos(prazo_dias_min, prazo_dias_max)
     base = sugerir_parametros_opcao(preco_atual, direcao,
                                     prazo_dias_min=prazo_dias_min,
                                     prazo_dias_max=prazo_dias_max)
@@ -143,6 +178,14 @@ def sugerir_parametros_opcao_com_preco(preco_atual: float, direcao: str, ticker:
 
     tipo_opcao = base["tipo_opcao"]
     strike_alvo = base["strike_sugerido_aprox"]
+    from trava import _premio_bs_europeu
+    dias_corridos = (prazo_dias_min + prazo_dias_max) / 2
+    base["premio"] = round(_premio_bs_europeu(
+        preco_atual, strike_alvo, dias_corridos / 365.0, 0.105, 0.30, tipo_opcao.lower()), 2)
+    base["observacao"] = (
+        "Estimativa Black-Scholes, volatilidade 30% a.a., juros 10.5% a.a., "
+        "sem dividendos; nao e cotacao nem preco executavel. Confirme liquidez."
+    )
 
     if token:
         real = _buscar_premio_oplab_para_strike(
@@ -153,8 +196,10 @@ def sugerir_parametros_opcao_com_preco(preco_atual: float, direcao: str, ticker:
             base["premio"] = real["premio_real"]
             base["fonte"] = "oplab"
             base["strike_sugerido_aprox"] = real.get("strike_real", strike_alvo)
+            base["vencimento_sugerido"] = real.get("vencimento") or f"{real['dias_corridos']} dias corridos"
+            base["liquidez_ok"] = real["liquidez_ok"]
             base["observacao"] = (
-                "Prêmio real da OpLab (cotação de mercado). Verifique a liquidez "
+                "Ask informado pela OpLab para compra; atualidade e execucao nao garantidas. Verifique a liquidez "
                 "(volume/contratos em aberto) antes de operar."
             )
 

@@ -20,16 +20,20 @@ processa mensagens novas (usa offset do Telegram) e as responde no chat.
 import json
 import logging
 import sys
+from datetime import date
 
 import requests
 
 import config
 from diario_sinais import formatar_resumo_desempenho
 from ai_analyzer import AIAnalyzer
+from telegram_utils import enviar_mensagem
 from trava import calcular_trava_manual, formatar_trava_manual
 from posicoes import (
     adicionar_posicao, adicionar_trava, carregar_posicoes, carregar_propostas,
     formatar_gestao_todas, gerar_gestao_posicao, remover_posicao, registrar_da_proposta,
+    _buscar_premio_trava, formatar_gestao_trava, gerar_gestao_trava,
+    formatar_gestao, numero_finito,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -64,38 +68,44 @@ def buscar_updates(token: str, offset: int, timeout: int = 30) -> list:
 
 
 def responder(token: str, chat_id, texto: str):
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    try:
-        r = requests.post(url, data={"chat_id": chat_id, "text": texto, "parse_mode": "HTML"})
-        if not r.ok:
-            logging.warning("Falha ao responder: %s", r.text)
-    except Exception as e:
-        logging.warning("Erro ao responder: %s", e)
+    return enviar_mensagem(token, chat_id, texto)
 
 
 def _precos_posicoes(posicoes: dict) -> dict:
     """Busca preços atuais de todas as posições (yfinance) pra gestão."""
     import pandas as pd
     import yfinance as yf
+    from b3_swing_analyzer import _yf_lock
 
     precos = {}
-    tickers = list(posicoes.keys())
+    tickers = [t for t, p in posicoes.items() if p.get("tipo_operacao") != "trava"]
     if not tickers:
         return precos
     try:
-        df = yf.download(
-            [f"{t}.SA" for t in tickers], period="5d", interval="1d",
-            progress=False, group_by="ticker",
-        )
+        with _yf_lock:
+            df = yf.download(
+                [f"{t}.SA" for t in tickers], period="5d", interval="1d",
+                auto_adjust=False, threads=False, timeout=15,
+                progress=False, group_by="ticker",
+            )
         for t in tickers:
             try:
-                d = df.get(t) or df.get(f"{t}.SA")
+                d = df.get(t)
+                if d is None:
+                    d = df.get(f"{t}.SA")
+                if d is None and len(tickers) == 1 and not isinstance(df.columns, pd.MultiIndex):
+                    d = df
                 if d is None:
                     continue
                 if isinstance(d.columns, pd.MultiIndex):
                     d.columns = d.columns.get_level_values(0)
                 d = d.rename(columns=str.lower)
-                precos[t] = float(d["close"].iloc[-1])
+                indice = pd.to_datetime(d.index)
+                if indice.tz is not None:
+                    indice = indice.tz_convert("America/Sao_Paulo")
+                d = d.loc[indice.date < pd.Timestamp.now(tz="America/Sao_Paulo").date()]
+                preco = float(d["close"].iloc[-1])
+                precos[t] = preco if numero_finito(preco) and preco > 0 else None
             except Exception:
                 precos[t] = None
     except Exception as e:
@@ -106,8 +116,37 @@ def _precos_posicoes(posicoes: dict) -> dict:
 def processar_comando(token: str, chat_id, texto: str) -> str:
     """Processa um comando e devolve a resposta a enviar."""
     partes = texto.strip().split()
-    comando = partes[0].lower().replace("@", "")
+    if not partes:
+        return None
+    comando = partes[0].lower().split("@", 1)[0]
     args = partes[1:]
+
+    if comando == "/carteira":
+        from carteira import avaliar_carteira, formatar_resumo_carteira
+        return formatar_resumo_carteira(avaliar_carteira(
+            carregar_posicoes(), config.CAPITAL_DISPONIVEL, config.RISCO_MAX_CARTEIRA_PCT,
+            config.EXPOSICAO_MAX_SETOR_PCT, config.SETORES, date.today().isoformat(),
+        ))
+
+    if comando == "/gatilho":
+        if len(args) != 4:
+            return "Uso: /gatilho TICKER PRECO_ATUAL ATR DATA_COTACAO (AAAA-MM-DD). Nao envia ordens."
+        from setups import validar_gatilho
+        try:
+            proposta = carregar_propostas().get(args[0].upper(), {})
+            plano = proposta.get("plano_setup")
+            if not plano:
+                return "Sem candidato com setup registrado; gere novo relatorio."
+            if date.fromisoformat(args[3]) != date.today():
+                return "Informe a data de hoje para conferir a cotacao; nao use precos antigos."
+            validado = validar_gatilho(plano, float(args[1]), float(args[2]), args[3])
+            import html
+            return (f"<b>{html.escape(args[0].upper())}: {validado['estado'].upper()}</b>\n"
+                    + html.escape(validado["motivo"]) +
+                    "\nConferencia com dados MANUAIS, nao cotacao certificada nem execucao. "
+                    "Reavalie /carteira e custos. Registre somente operacoes realmente executadas.")
+        except (TypeError, ValueError):
+            return "Dados invalidos; confira preco, ATR e data AAAA-MM-DD."
 
     if comando in ("/registrar", "/adicionar"):
         if not args:
@@ -123,8 +162,8 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
                 preco = float(args[2])
                 stop = float(args[3])
                 alvo = float(args[4])
-                if preco <= 0 or stop <= 0 or alvo <= 0:
-                    return "⚠️ Preços precisam ser números positivos."
+                if not all(numero_finito(p) and p > 0 for p in (preco, stop, alvo)):
+                    return "⚠️ Preços precisam ser números finitos e positivos."
                 if direcao == "compra" and not (stop < preco < alvo):
                     return "⚠️ Na compra, stop < entrada < alvo. Ex: /registrar PETR4 compra 43.11 40.50 48.22"
                 if direcao == "venda" and not (alvo < preco < stop):
@@ -139,9 +178,12 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
                 return f"⚠️ Erro ao registrar: {str(e)[:200]}"
 
         # Registro pela proposta do robô: /registrar TICKER [QTD]
-        quantidade = int(args[1]) if len(args) > 1 else 0
-        posicao, msg = registrar_da_proposta(ticker, quantidade=quantidade)
-        return msg
+        try:
+            quantidade = int(args[1]) if len(args) > 1 else 0
+            posicao, msg = registrar_da_proposta(ticker, quantidade=quantidade)
+            return msg
+        except ValueError as e:
+            return f"⚠️ Valor inválido: {e}"
 
     if comando in ("/remover", "/sair", "/fechar"):
         if not args:
@@ -166,12 +208,7 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
         if ticker not in posicoes:
             return f"⚠️ {ticker} não está registrada. Propostas disponíveis: {', '.join(carregar_propostas().keys()) or 'nenhuma'}."
         precos = _precos_posicoes({ticker: posicoes[ticker]})
-        preco = precos.get(ticker)
-        if preco is None:
-            return f"⚠️ Preço de {ticker} indisponível no momento."
-        gestao = gerar_gestao_posicao(posicoes[ticker], preco)
-        from posicoes import formatar_gestao
-        return formatar_gestao(gestao)
+        return formatar_gestao_todas({ticker: posicoes[ticker]}, precos)
 
     if comando in ("/propostas", "/proposta"):
         propostas = carregar_propostas()
@@ -179,6 +216,22 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
             return "Nenhuma proposta pendente. O robô propõe quando um ativo dá ENTRAR (score ≥ 8)."
         linhas = ["📌 <b>Propostas de entrada em aberto:</b>"]
         for t, p in propostas.items():
+            if p.get("estado_entrada") == "candidato" or p.get("plano_setup") is not None:
+                from setups import _data
+                plano = p.get("plano_setup")
+                try:
+                    idade = (date.today() - _data(plano.get("data_sinal"))).days
+                except (AttributeError, ValueError, TypeError, OverflowError):
+                    linhas.append(f"  {t}: INVALIDO, data de sinal indisponivel; gere novo relatorio.")
+                    continue
+                if idade > 4:
+                    linhas.append(f"  {t}: EXPIRADO, sinal fora da validade de 4 dias corridos.")
+                    continue
+                if idade < 0:
+                    linhas.append(f"  {t}: INVALIDO, data de sinal futura; gere novo relatorio.")
+                    continue
+                linhas.append(f"  {t}: CANDIDATO, aguardar gatilho {p['preco_entrada']}; consulte /gatilho.")
+                continue
             linhas.append(
                 f"  {t} ({p['direcao']}) entrada R$ {p['preco_entrada']} · "
                 f"stop R$ {p['stop']} · alvo R$ {p['alvo']} — responda /registrar {t}"
@@ -208,14 +261,16 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
             trava = calcular_trava_manual(
                 direcao, strike_comp, premio_comp, strike_vend, premio_vend,
             )
-            return "🔒 <b>Trava com preços atuais</b>\n" + formatar_trava_manual(trava)
+            return ("🔒 <b>Calculo manual de trava</b>\n"
+                    "Vencimento nao informado: calculo aritmetico, nao valida prazo nem autoriza operar.\n"
+                    + formatar_trava_manual(trava))
         except ValueError as e:
             return f"⚠️ {e}\nExemplo: /trava compra 10.86 0.22 11.56 0.09"
         except Exception as e:
             logging.warning("Erro ao calcular trava manual: %s", e)
             return f"⚠️ Erro ao calcular: {str(e)[:200]}"
 
-    if comando in ("/analisar_posicoes", "/analisar", "/gestao_ia"):
+    if comando in ("/analisar_posicoes", "/analisar_posições", "/analisar", "/gestao_ia"):
         return _analisar_posicoes_ia()
 
     if comando in ("/relatorio", "/report", "/diario"):
@@ -234,25 +289,15 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
             ticker = args[0].upper()
             tipo = args[1].lower()
 
-            # Separa os números dos demais argumentos, ignorando datas
-            # (ex: 2026-10-16) que não são números.
-            numeros = []
-            vencimento = ""
-            for arg in args[2:]:
-                if "-" in arg or "/" in arg:
-                    vencimento = arg  # é uma data de vencimento
-                    continue
-                try:
-                    numeros.append(float(arg))
-                except ValueError:
-                    return f"⚠️ Valor inválido: '{arg}'. Use números separados por espaço."
-            if len(numeros) < 6:
-                return (
-                    "Uso: /trava_registrar TICKER DIRECAO STRIKE_COMPRA PREMIO_COMPRA "
-                    "STRIKE_VENDA PREMIO_VENDA STOP_PREMIO ALVO_PREMIO [VENCIMENTO]\n"
-                    "Exemplo: /trava_registrar CMIG4 compra 10.86 0.22 11.56 0.09 0.065 0.45 2026-10-16\n"
-                    "Os valores STOP e ALVO são no PRÊMIO da trava (R$ por contrato)."
-                )
+            if len(args) not in (8, 9):
+                return "Uso: /trava_registrar TICKER DIRECAO SC PC SV PV STOP ALVO [VENCIMENTO]"
+            try:
+                numeros = [float(arg) for arg in args[2:8]]
+            except ValueError:
+                return "⚠️ Valor inválido: use números separados por espaço."
+            if not all(numero_finito(n) for n in numeros):
+                return "⚠️ Valor inválido: use números finitos."
+            vencimento = args[8] if len(args) == 9 else ""
 
             strike_comp, premio_comp, strike_vend, premio_vend = numeros[0], numeros[1], numeros[2], numeros[3]
             stop_premio = numeros[4]
@@ -277,6 +322,8 @@ def processar_comando(token: str, chat_id, texto: str) -> str:
     if comando in ("/help", "/ajuda", "/start", "/comandos"):
         return (
             "🤖 <b>Comandos do robô:</b>\n"
+            "  /carteira — risco agregado e limites para novas exposicoes\n"
+            "  /gatilho TICKER PRECO ATR DATA — conferencia manual de candidato, sem ordens\n"
             "  /relatorio — dispara o relatório diário completo (gráficos + IA + travas)\n"
             "  /analisar_posicoes — IA analisa suas posições abertas (manter/ajustar/sair)\n"
             "  /registrar TICKER — registra a posição que o robô propôs\n"
@@ -338,7 +385,7 @@ def _acionar_relatorio_github() -> str:
 def _montar_analisador_ia() -> AIAnalyzer | None:
     """Cria o AIAnalyzer (Gemini + Nemotron) se as chaves estiverem configuradas."""
     api_key = getattr(config, "GEMINI_API_KEY", "")
-    if not api_key:
+    if not api_key and not getattr(config, "CARLOS", ""):
         return None
     return AIAnalyzer(
         api_key=api_key,
@@ -352,11 +399,7 @@ def _montar_analisador_ia() -> AIAnalyzer | None:
 
 
 def _analisar_posicoes_ia() -> str:
-    """
-    Puxa a IA para analisar TODAS as posições abertas (ações e travas).
-    Monta um resumo de cada posição com preço atual e pede à IA uma leitura
-    clara: manter, ajustar stop/alvo, ou sair.
-    """
+    """Gestão determinística primeiro; IA apenas complementa posições elegíveis."""
     import html as _html
 
     posicoes = carregar_posicoes()
@@ -365,31 +408,48 @@ def _analisar_posicoes_ia() -> str:
 
     precos = _precos_posicoes(posicoes)
 
-    # Monta o resumo textual das posições
+    blocos = []
     resumo = []
+    elegiveis = set()
+    saida_obrigatoria = False
     for ticker, posicao in posicoes.items():
-        tipo = "TRAVA" if posicao.get("tipo_operacao") == "trava" else "AÇÃO"
-        direcao = posicao.get("direcao", "?")
-        preco_atual = precos.get(ticker)
-        preco_txt = f"R$ {preco_atual:.2f}" if preco_atual else "N/D"
-
-        if tipo == "TRAVA":
-            resumo.append(
-                f"• {ticker} — TRAVA {direcao} ({posicao.get('strike_comprado')}/{posicao.get('strike_vendido')})\n"
-                f"    Débito por contrato: R$ {posicao.get('preco_entrada', 0):.2f}\n"
-                f"    Stop no prêmio: R$ {posicao.get('stop', 0):.2f} · Alvo no prêmio: R$ {posicao.get('alvo', 0):.2f}\n"
-                f"    Vencimento: {posicao.get('vencimento', 'N/D')}"
-            )
+        if posicao.get("tipo_operacao") == "trava":
+            premio = _buscar_premio_trava(ticker, posicao)
+            gestao = gerar_gestao_trava(posicao, premio)
+            bloco = formatar_gestao_trava(posicao, premio)
+            blocos.append(bloco)
+            if gestao["acao"] == "INDISPONÍVEL":
+                continue
+            saida_obrigatoria |= gestao["acao"] in ("STOP", "ALVO", "VERIFICAR VENCIMENTO")
         else:
-            resumo.append(
-                f"• {ticker} — {direcao.upper()} (ação)\n"
-                f"    Entrada: R$ {posicao.get('preco_entrada', 0):.2f} · Preço atual: {preco_txt}\n"
-                f"    Stop: R$ {posicao.get('stop', 0):.2f} · Alvo: R$ {posicao.get('alvo', 0):.2f}"
-            )
+            try:
+                gestao = gerar_gestao_posicao(posicao, precos.get(ticker))
+            except ValueError:
+                blocos.append(f"{ticker}: cotação/registro indisponível para gestão. Sem recomendação de manter/sair.")
+                continue
+            bloco = formatar_gestao(gestao)
+            blocos.append(bloco)
+            saida_obrigatoria |= gestao["acao"] in ("SAIR AGORA", "FECHAR", "FECHAR POR TEMPO")
+        elegiveis.add(ticker)
+        resumo.append(bloco + f"\nData de entrada: {posicao.get('data_entrada', 'não registrada')}")
+
+    base = "📋 <b>Gestão determinística das posições</b>\nData atual: " + date.today().isoformat() + "\n\n" + "\n\n".join(blocos)
+    if not elegiveis:
+        return base + "\n\nSem cotações válidas para análise; IA não consultada."
+    # Bloqueio por construção: não publica texto livre da IA quando existe saída
+    # determinística, mesmo que a IA rotule 'sair' e contradiga isso na explicação.
+    if saida_obrigatoria:
+        return base + "\n\nIA não consultada: prevalece a saída/verificação determinística."
 
     prompt = (
-        "Você é um gestor de risco experiente em swing trade na B3. Analise estas "
-        "POSIÇÕES ABERTAS e diga o que fazer com cada uma:\n\n"
+        f"Data atual: {date.today().isoformat()}. Você é um gestor de risco na B3. "
+        "Complemente a gestão determinística abaixo, sem contrariar stop/alvo. "
+        "Os preços são de fechamento, não tempo real e não garantem execução. "
+        "Sem cotação válida não recomende manter/sair; não analise tickers ausentes. "
+        "Risco limitado não é risco baixo: uma trava pode perder todo o débito. "
+        "O tempo não é necessariamente favorável; considere vencimento, theta, liquidez, exercício e custos. "
+        "Limites teóricos pressupõem ambas as pernas intactas e excluem custos. "
+        "Não aumente o risco nem afrouxe stops registrados.\n\n"
         + "\n\n".join(resumo)
         + "\n\nPara cada posição, avalie: manter, ajustar stop/alvo, ou sair. "
         "Responda APENAS com JSON no formato:\n"
@@ -399,32 +459,37 @@ def _analisar_posicoes_ia() -> str:
 
     analisador = _montar_analisador_ia()
     if analisador is None:
-        return "❌ IA não configurada. Adicione GEMINI_API_KEY."
+        return base + "\n\n❌ IA não configurada. Adicione GEMINI_API_KEY."
 
     try:
         resposta, provedor = analisador.analisar_prompt(prompt)
     except Exception as e:
         logging.warning("Falha na IA ao analisar posições: %s", e)
-        return f"⚠️ Erro ao analisar posições: {str(e)[:200]}"
+        return base + "\n\n⚠️ Erro ao consultar IA; gestão determinística preservada."
 
     if not resposta:
-        return "⚠️ A IA não conseguiu analisar as posições agora. Tente novamente."
+        return base + "\n\n⚠️ A IA não conseguiu analisar as posições agora."
 
     # Formata a resposta
     analises = resposta.get("analises", []) if isinstance(resposta, dict) else []
-    if not analises:
-        # Se não veio no formato esperado, tenta usar o dict cru
-        return "🧠 <b>Análise da IA:</b>\n" + str(resposta)[:1500]
+    if not isinstance(analises, list) or not analises:
+        return base + "\n\nResposta da IA inválida; gestão determinística preservada."
 
-    linhas = ["🧠 <b>Análise das posições (" + provedor + "):</b>"]
+    linhas = [base, "\n🧠 <b>Análise das posições (" + _html.escape(str(provedor)) + "):</b>"]
     emoji_acao = {"manter": "✅", "ajustar": "⚙️", "sair": "🚪"}
     for a in analises:
+        if not isinstance(a, dict):
+            continue
         ticker = a.get("ticker", "?")
         acao = a.get("acao", "?")
-        emoji = emoji_acao.get(acao.lower(), "❓")
+        if not isinstance(ticker, str) or ticker not in elegiveis or not isinstance(acao, str):
+            continue
+        if acao.lower() not in emoji_acao:
+            continue
+        emoji = emoji_acao[acao.lower()]
         explicacao = _html.escape(str(a.get("explicacao", "")), quote=False)
         risco = _html.escape(str(a.get("risco", "")), quote=False)
-        linhas.append(f"\n{emoji} <b>{ticker}</b> — {acao.upper()}")
+        linhas.append(f"\n{emoji} <b>{_html.escape(ticker)}</b> — {acao.upper()}")
         if explicacao:
             linhas.append(f"  💡 {explicacao}")
         if risco:

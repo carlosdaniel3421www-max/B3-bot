@@ -1,7 +1,17 @@
 # -*- coding: utf-8 -*-
 """Testes do parser de comandos do Telegram (sem rede)."""
 from unittest.mock import patch
+from datetime import date
+import pytest
 from telegram_bot import processar_comando
+
+
+@pytest.fixture(autouse=True)
+def sem_rede(monkeypatch):
+    def bloquear(*args, **kwargs):
+        raise AssertionError("Rede proibida nos testes")
+    monkeypatch.setattr("requests.sessions.Session.request", bloquear)
+    monkeypatch.setattr("socket.socket.connect", bloquear)
 
 
 def test_analisar_posicoes_sem_posicoes():
@@ -15,7 +25,7 @@ def test_analisar_posicoes_sem_ia():
         "PETR4": {
             "ticker": "PETR4", "direcao": "compra",
             "preco_entrada": 43.11, "stop": 40.5, "alvo": 48.22,
-            "quantidade": 100, "data_entrada": "2026-08-20", "prazo_maximo_dias": 20,
+            "quantidade": 100, "data_entrada": date.today().isoformat(), "prazo_maximo_dias": 20,
         }
     }
     with patch("telegram_bot.carregar_posicoes", return_value=posicoes):
@@ -32,7 +42,7 @@ def test_analisar_posicoes_com_ia():
             "strike_comprado": 9.67, "strike_vendido": 8.47,
             "premio_comprado": 0.29, "premio_vendido": 0.08,
             "preco_entrada": 0.21, "stop": 0.10, "alvo": 0.42,
-            "quantidade": 100, "vencimento": "2026-10-16",
+            "quantidade": 100, "vencimento": "2099-10-16",
             "data_entrada": "2026-08-24", "prazo_maximo_dias": 20,
         }
     }
@@ -46,7 +56,7 @@ def test_analisar_posicoes_com_ia():
             "Nemotron",
         ),
     })()
-    with patch("telegram_bot.carregar_posicoes", return_value=posicoes):
+    with patch("telegram_bot.carregar_posicoes", return_value=posicoes), patch("telegram_bot._buscar_premio_trava", return_value=0.25):
         with patch("telegram_bot._precos_posicoes", return_value={"LREN3": 10.83}):
             with patch("telegram_bot._montar_analisador_ia", return_value=analisador_mock):
                 resposta = processar_comando("fake", 1, "/analisar_posicoes")
@@ -68,7 +78,8 @@ def test_ajuda_lista_comandos():
 
 
 def test_relatorio_sem_token():
-    resposta = processar_comando("fake", 1, "/relatorio")
+    with patch("telegram_bot.config.GITHUB_TOKEN", ""):
+        resposta = processar_comando("fake", 1, "/relatorio")
     assert "GITHUB_TOKEN" in resposta
     assert "não configurado" in resposta
 
@@ -229,35 +240,91 @@ def test_sanitizar_html_vazio():
     assert _sanitizar_html(None) is None
 
 
-def test_webhook_responde_200_e_processa_em_thread():
-    from unittest.mock import patch
+def test_webhook_responde_200_e_processa_em_thread(monkeypatch):
+    import queue
+    import threading
+    from unittest.mock import Mock
+    import requests
     import servidor_api as sa
 
+    entrou, liberar = threading.Event(), threading.Event()
+    def comando(*args):
+        entrou.set()
+        assert liberar.wait(5)
+        return "ok"
+
+    mock_proc = Mock(side_effect=comando)
+    monkeypatch.setattr(requests.sessions.Session, "request", Mock(side_effect=AssertionError("Rede proibida")))
+    monkeypatch.setattr(sa, "TOKEN", "fake:token")
+    monkeypatch.setattr(sa, "CHAT_ID_AUTORIZADO", "1")
+    monkeypatch.setattr(sa, "WEBHOOK_SECRET", "")
+    monkeypatch.setattr(sa, "_processados", {})
+    monkeypatch.setattr(sa, "_fila", queue.Queue(maxsize=2))
+    monkeypatch.setattr(sa, "_worker", None)
+    monkeypatch.setattr(sa, "processar_comando", mock_proc)
+    monkeypatch.setattr(sa, "_responder_telegram", Mock(return_value=True))
     update = {"update_id": 123, "message": {"chat": {"id": "1"}, "text": "/relatorio"}}
-    with patch.object(sa, "CHAT_ID_AUTORIZADO", "1"):
-        with patch.object(sa, "processar_comando", return_value="ok") as mock_proc:
-            with sa.app.test_request_context("/webhook", method="POST", json=update):
-                resp = sa.webhook()
-                assert resp.status_code == 200
-            # A thread é daemon e o processar_comando foi chamado
-            import time
-            time.sleep(0.3)
-            mock_proc.assert_called_once()
+    try:
+        with sa.app.test_request_context("/webhook", method="POST", json=update):
+            assert sa.webhook().status_code == 200
+        assert entrou.wait(5)
+        assert not liberar.is_set()
+        assert sa.app.test_client().get("/health").status_code == 200
+        mock_proc.assert_called_once()
+    finally:
+        liberar.set()
+        sa._fila.put(None, timeout=5)
+        sa._worker.join(timeout=5)
+        assert not sa._worker.is_alive()
+        sa._fila.join()
+    assert sa._processados[123] == "enviado"
+    sa._responder_telegram.assert_called_once()
 
 
-def test_webhook_dedup_reentrega():
-    from unittest.mock import patch
+def test_webhook_dedup_reentrega(monkeypatch):
+    import queue
+    import threading
+    from unittest.mock import Mock
+    import requests
     import servidor_api as sa
 
+    entrou, liberar = threading.Event(), threading.Event()
+    def comando(*args):
+        entrou.set()
+        assert liberar.wait(5)
+        return "ok"
+
+    mock_proc = Mock(side_effect=comando)
+    monkeypatch.setattr(requests.sessions.Session, "request", Mock(side_effect=AssertionError("Rede proibida")))
+    monkeypatch.setattr(sa, "TOKEN", "fake:token")
+    monkeypatch.setattr(sa, "CHAT_ID_AUTORIZADO", "1")
+    monkeypatch.setattr(sa, "WEBHOOK_SECRET", "")
+    monkeypatch.setattr(sa, "_processados", {})
+    monkeypatch.setattr(sa, "_fila", queue.Queue(maxsize=2))
+    monkeypatch.setattr(sa, "_worker", None)
+    monkeypatch.setattr(sa, "processar_comando", mock_proc)
+    monkeypatch.setattr(sa, "_responder_telegram", Mock(return_value=True))
     update = {"update_id": 999, "message": {"chat": {"id": "1"}, "text": "/ajuda"}}
-    with patch.object(sa, "CHAT_ID_AUTORIZADO", "1"):
-        with patch.object(sa, "processar_comando") as mock_proc:
-            with patch.object(sa, "threading"):
-                with sa.app.test_request_context("/webhook", method="POST", json=update):
-                    sa.webhook()
-                    sa.webhook()  # mesma re-entrega
-            # processar_comando não é chamado 2x; a 2ª vez é ignorada (dedup)
-            assert mock_proc.call_count <= 1
+    cliente = sa.app.test_client()
+    try:
+        assert cliente.post("/webhook", json=update).status_code == 200
+        assert entrou.wait(5)
+        for _ in range(5):
+            assert cliente.post("/webhook", json=update).status_code == 200
+        mock_proc.assert_called_once()
+        assert sa._fila.empty()
+        liberar.set()
+        sa._fila.join()
+        assert cliente.post("/webhook", json=update).status_code == 200
+        sa._fila.join()
+        mock_proc.assert_called_once()
+        sa._responder_telegram.assert_called_once()
+    finally:
+        liberar.set()
+        sa._fila.put(None, timeout=5)
+        sa._worker.join(timeout=5)
+        assert not sa._worker.is_alive()
+        sa._fila.join()
 
 
 def test_gestao_trava_sem_premio_real():
@@ -282,9 +349,10 @@ def test_gestao_trava_com_premio_real():
         "preco_entrada": 0.13, "stop": 0.07, "alvo": 0.45,
         "vencimento": "2026-10-16",
     }
-    saida = formatar_gestao_trava(trava, 0.19)
-    assert "+46" in saida or "lucro" in saida.lower()
-    assert "Prêmio atual" in saida
+    saida = formatar_gestao_trava(trava, 0.05)
+    assert "-61.5%" in saida
+    assert "Valor líquido da trava" in saida
+    assert "STOP no prêmio atingido" in saida
 
 
 def test_gestao_trava_stop_atingido():
@@ -315,17 +383,19 @@ def test_buscar_premio_trava_com_cadeia_real():
     trava = {
         "ticker": "LREN3", "direcao": "compra", "tipo_operacao": "trava",
         "strike_comprado": 10.86, "strike_vendido": 11.56,
+        "vencimento": "2026-10-16",
     }
     cadeia_fake = {
         "preco_base": 10.82,
         "expirations": [{
             "dt": "2026-10-16", "du": 35, "mensal": True,
-            "calls": {10.86: {"preco": 0.19, "negocios": 50}},
+            "calls": {10.86: {"preco": 0.19, "negocios": 50},
+                      11.56: {"preco": 0.14, "negocios": 30}},
             "puts": {},
         }],
     }
     with patch("fonte_opcoes.buscar_cadeia_estruturada", return_value=cadeia_fake):
-        assert _buscar_premio_trava("LREN3", trava) == 0.19
+        assert _buscar_premio_trava("LREN3", trava) == 0.05
 
 
 def test_buscar_premio_trava_cadeia_falha():

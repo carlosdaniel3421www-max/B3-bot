@@ -11,54 +11,124 @@ memória se perderia a cada execução).
 
 import json
 import os
+import tempfile
 from datetime import date
 
 CAMINHO_ESTADO_PADRAO = "estado.json"
 
 
 def carregar_estado(arquivo: str = CAMINHO_ESTADO_PADRAO) -> dict:
-    if not os.path.exists(arquivo):
-        return {}
+    def constante_invalida(valor):
+        raise ValueError(f"Constante JSON nao finita: {valor}")
+
+    def sem_duplicatas(pares):
+        dados = {}
+        for chave, valor in pares:
+            if chave in dados:
+                raise ValueError(f"Chave duplicada: {chave}")
+            dados[chave] = valor
+        return dados
     try:
         with open(arquivo, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, IOError):
+            estado = json.load(f, object_pairs_hook=sem_duplicatas, parse_constant=constante_invalida)
+        _validar_estado(estado)
+        return estado
+    except FileNotFoundError:
         return {}
+    except (ValueError, OSError) as exc:
+        raise ValueError(f"Nao foi possivel ler {arquivo}; arquivo preservado") from exc
 
 
 def salvar_estado(estado: dict, arquivo: str = CAMINHO_ESTADO_PADRAO):
-    with open(arquivo, "w", encoding="utf-8") as f:
-        json.dump(estado, f, ensure_ascii=False, indent=2)
+    """Substituicao atomica; o chamador deve serializar ciclos ler/alterar/salvar."""
+    _validar_estado(estado)
+    conteudo = json.dumps(estado, ensure_ascii=False, indent=2, allow_nan=False)
+    temporario = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False,
+                                         dir=os.path.dirname(os.path.abspath(arquivo))) as f:
+            temporario = f.name
+            f.write(conteudo)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporario, arquivo)
+    finally:
+        if temporario and os.path.exists(temporario):
+            os.unlink(temporario)
 
 
-def score_suavizado(estado: dict, ticker: str, score_novo: int, janela: int = 3) -> int:
+def _validar_score(score):
+    if isinstance(score, bool) or not isinstance(score, int) or not 0 <= score <= 10:
+        raise ValueError("Score/nivel deve ser inteiro de 0 a 10")
+
+
+def _validar_estado(estado):
+    if not isinstance(estado, dict):
+        raise ValueError("Estado deve ser um mapa de registros")
+    for ticker, registro in estado.items():
+        if not isinstance(ticker, str) or not ticker.strip() or not isinstance(registro, dict):
+            raise ValueError("Registro de estado invalido")
+        if "score" in registro:
+            _validar_score(registro["score"])
+        if "direcao" in registro and registro["direcao"] not in ("compra", "venda", "neutro"):
+            raise ValueError("Direcao invalida")
+        for campo in ("ultima_data_score", "data_primeiro_alerta"):
+            valor = registro.get(campo, "")
+            if valor != "":
+                if not isinstance(valor, str) or date.fromisoformat(valor).isoformat() != valor:
+                    raise ValueError("Data do estado deve ser ISO YYYY-MM-DD")
+        historico = registro.get("score_history", [])
+        if not isinstance(historico, list):
+            raise ValueError("Historico de scores deve ser lista")
+        for amostra in historico:
+            if isinstance(amostra, dict):
+                _validar_score(amostra.get("score"))
+                if amostra.get("direcao") not in ("compra", "venda", "neutro"):
+                    raise ValueError("Direcao de amostra invalida")
+            else:
+                _validar_score(amostra)  # Formato numerico legado, descartado na suavizacao.
+
+
+def score_suavizado(estado: dict, ticker: str, score_novo: int, direcao: str, janela: int = 3) -> int:
     """
-    Calcula o score suavizado como média dos últimos `janela` scores.
-    Guarda histórico no estado para evitar que um único dia extremo
-    (ex: 10/10) vire 4/10 no dia seguinte por oscilação comum.
+    Calcula a média dos últimos `janela` scores na direção atual,
+    sem atravessar uma inversão. A execução mais recente substitui a do dia.
     """
+    if isinstance(janela, bool) or not isinstance(janela, int) or janela < 1:
+        raise ValueError("Janela deve ser inteiro positivo")
+    if isinstance(score_novo, bool) or not isinstance(score_novo, int):
+        raise ValueError("Score deve ser inteiro finito")
+    if direcao not in ("compra", "venda", "neutro"):
+        raise ValueError("Direcao invalida")
+    if not isinstance(ticker, str) or not ticker.strip():
+        raise ValueError("Ticker invalido")
+    _validar_estado(estado)
+    # Mantem o clamp da interface existente, antes de persistir a amostra.
+    score_novo = max(0, min(10, score_novo))
     hoje = date.today().isoformat()
     if ticker not in estado:
         estado[ticker] = {}
     registro = estado[ticker]
 
-    if "score_history" not in registro:
-        registro["score_history"] = []
-    if "ultima_data_score" not in registro:
-        registro["ultima_data_score"] = ""
+    historico = list(registro.get("score_history", []))
+    # O formato legado não permite inferir a direção de cada amostra.
+    if any(not isinstance(amostra, dict) for amostra in historico):
+        historico = []
+    amostra = {"score": score_novo, "direcao": direcao}
+    if historico and registro.get("ultima_data_score") == hoje:
+        historico[-1] = amostra
+    else:
+        historico.append(amostra)
+    historico = historico[-janela:]
+    registro["score_history"] = historico
+    registro["ultima_data_score"] = hoje
 
-    # Só adiciona ao histórico se for um dia diferente
-    if registro["ultima_data_score"] != hoje:
-        registro["score_history"].append(score_novo)
-        registro["ultima_data_score"] = hoje
-        # Mantém só os últimos `janela` scores
-        registro["score_history"] = registro["score_history"][-janela:]
-
-    # Média dos últimos scores
-    historico = registro["score_history"]
-    if not historico:
-        return score_novo
-    media = round(sum(historico) / len(historico))
+    scores = []
+    for amostra in reversed(historico):
+        if amostra["direcao"] != direcao:
+            break
+        scores.append(amostra["score"])
+    media = round(sum(scores) / len(scores))
     # Garante que fica entre 0 e 10
     return max(0, min(10, media))
 
@@ -68,7 +138,14 @@ def eh_alerta_novo(estado: dict, ticker: str, score: int, direcao: str, nivel_de
     Decide se esse é um alerta NOVO (deve mostrar plano completo) ou se já
     foi avisado antes na mesma direção (deve mostrar só a versão resumida).
     """
-    if score < nivel_detalhe:
+    if not isinstance(ticker, str) or not ticker.strip():
+        raise ValueError("Ticker invalido")
+    _validar_estado(estado)
+    _validar_score(score)
+    _validar_score(nivel_detalhe)
+    if direcao not in ("compra", "venda", "neutro"):
+        raise ValueError("Direcao invalida")
+    if direcao == "neutro" or score < nivel_detalhe:
         return False  # nível baixo nunca gera plano completo
 
     anterior = estado.get(ticker)
@@ -92,9 +169,23 @@ def atualizar_estado(estado: dict, ticker: str, score: int, direcao: str, nivel_
     ele estiver na "zona de amortecimento" (nivel_detalhe - margem_saida até
     nivel_detalhe), a memória do alerta anterior é preservada.
     """
+    if not isinstance(ticker, str) or not ticker.strip():
+        raise ValueError("Ticker invalido")
+    _validar_estado(estado)
+    _validar_score(score)
+    _validar_score(nivel_detalhe)
+    if isinstance(margem_saida, bool) or not isinstance(margem_saida, int) or not 0 <= margem_saida <= nivel_detalhe:
+        raise ValueError("Margem deve ser inteira entre zero e nivel_detalhe")
+    if direcao not in ("compra", "venda", "neutro"):
+        raise ValueError("Direcao invalida")
     limite_saida = nivel_detalhe - margem_saida
 
-    if score >= nivel_detalhe:
+    if direcao == "neutro":
+        # Encerra o alerta, mas preserva a amostra neutra como barreira direcional.
+        registro = estado.get(ticker, {})
+        for campo in ("score", "direcao", "data_primeiro_alerta"):
+            registro.pop(campo, None)
+    elif score >= nivel_detalhe:
         anterior = estado.get(ticker, {})
         estado[ticker] = {
             "score": score,

@@ -23,6 +23,7 @@ Não é recomendação de investimento. A decisão final é sempre sua.
 import argparse
 import logging
 import sys
+import threading
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -30,30 +31,98 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
+# Serializa downloads deste processo para reduzir contencao do cache yfinance.
+# Nao impede bloqueios entre processos nem garante ausencia de rate limit.
+_yf_lock = threading.Lock()
+
+
+def _validar_dados(df: pd.DataFrame, colunas=("high", "low", "close")):
+    if df.empty or not set(colunas).issubset(df.columns) or not df.columns.is_unique:
+        raise ValueError("Historico vazio ou colunas ausentes/duplicadas")
+    valores = df[list(colunas)].to_numpy(dtype=float)
+    if not np.isfinite(valores).all():
+        raise ValueError("Historico contem NaN ou infinito")
+    if (df[[c for c in colunas if c != "volume"]] <= 0).any().any():
+        raise ValueError("Precos devem ser positivos")
+    if "volume" in colunas and (df["volume"] < 0).any():
+        raise ValueError("Volume negativo")
+    if {"high", "low", "close"}.issubset(colunas):
+        if ((df["high"] < df["close"]) | (df["low"] > df["close"])).any():
+            raise ValueError("OHLC inconsistente")
+    if "open" in colunas:
+        if ((df["open"] > df["high"]) | (df["open"] < df["low"])).any():
+            raise ValueError("Abertura fora da faixa OHLC")
+    if not df.index.is_unique or not df.index.is_monotonic_increasing or df.index.hasnans:
+        raise ValueError("Indice deve ser crescente, unico e sem valores ausentes")
+
+
+def _preparar_historico(df: pd.DataFrame, intervalo="1d", incluir_atual=False,
+                       agora=None) -> pd.DataFrame:
+    """Diario fechado usa apenas sessoes anteriores a hoje, sem inferir leilao final."""
+    df = df.copy()
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    df = df.rename(columns=str.lower)
+    if pd.api.types.is_numeric_dtype(df.index.dtype):
+        raise ValueError("Historico sem indice temporal")
+    df.index = pd.to_datetime(df.index)
+    if df.index.tz is not None:
+        df.index = df.index.tz_convert("America/Sao_Paulo").tz_localize(None)
+    df.index.name = "date"
+    df = df.sort_index()
+    agora = pd.Timestamp.now(tz="America/Sao_Paulo") if agora is None else pd.Timestamp(agora)
+    if agora.tzinfo is not None:
+        agora = agora.tz_convert("America/Sao_Paulo").tz_localize(None)
+    if intervalo == "1d":
+        limite = agora.normalize()
+        df = df.loc[df.index <= limite] if incluir_atual else df.loc[df.index < limite]
+    elif intervalo == "60m":
+        df = df.loc[df.index + pd.Timedelta(hours=1) <= agora]
+    else:
+        df = df.loc[df.index <= agora]
+    _validar_dados(df, ("open", "high", "low", "close", "volume"))
+    return df
+
+
+def _media_wilder(serie: pd.Series, periodo: int) -> pd.Series:
+    """RMA: semente SMA de N observacoes, seguida de (anterior*(N-1)+atual)/N."""
+    if not isinstance(periodo, int) or periodo < 1:
+        raise ValueError("Periodo deve ser inteiro positivo")
+    semente = serie.rolling(periodo).mean()
+    posicoes = np.flatnonzero(semente.notna().to_numpy())
+    if not len(posicoes):
+        return serie * np.nan
+    inicio = posicoes[0]
+    valores = serie.copy()
+    valores.iloc[:inicio] = np.nan
+    valores.iloc[inicio] = semente.iloc[inicio]
+    return valores.ewm(alpha=1 / periodo, adjust=False).mean()
+
 
 # --------------------------------------------------------------------------
 # 1. COLETA DE DADOS
 # --------------------------------------------------------------------------
 
 def baixar_dados(ticker: str, periodo: str = "1y", intervalo: str = "1d", tentativas: int = 3,
-                 usar_cache: bool = True) -> pd.DataFrame:
+                 usar_cache: bool = True, incluir_atual: bool = False) -> pd.DataFrame:
     """
     Baixa dados históricos via yfinance. Ticker sem sufixo -> adiciona .SA (B3).
     Tenta novamente em caso de falha intermitente (comum no Yahoo Finance),
     com uma pequena pausa entre tentativas.
 
-    Se usar_cache=True, salva o DataFrame em cache/<ticker>_<periodo>.parquet e
-    reutiliza quando o arquivo for do mesmo dia — dados diários não mudam dentro
-    do pregão, evitando re-download a cada execução do workflow.
+    Cache pickle apenas de sessoes anteriores a hoje (data de Brasilia).
+    incluir_atual=True permite candle diario parcial e sempre ignora o cache.
     """
-    import datetime
     import os
     import pickle
     import time
     import yfinance as yf
 
-    if not ticker.upper().endswith(".SA"):
-        ticker = ticker.upper() + ".SA"
+    ticker = ticker.upper()
+    if not ticker.endswith(".SA") and not ticker.startswith("^"):
+        ticker += ".SA"
+    usar_cache = usar_cache and intervalo == "1d" and not incluir_atual
+    hoje = pd.Timestamp.now(tz="America/Sao_Paulo").date()
 
     # Cache diário (só para dados diários; intradiário nunca usa)
     cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
@@ -61,25 +130,22 @@ def baixar_dados(ticker: str, periodo: str = "1y", intervalo: str = "1d", tentat
     if usar_cache and intervalo == "1d":
         try:
             if os.path.exists(cache_file):
-                mod_time = datetime.datetime.fromtimestamp(os.path.getmtime(cache_file)).date()
-                if mod_time == datetime.date.today():
+                mod_time = pd.Timestamp(os.path.getmtime(cache_file), unit="s", tz="UTC").tz_convert("America/Sao_Paulo").date()
+                if mod_time == hoje:
                     with open(cache_file, "rb") as f:
                         df = pickle.load(f)
-                    df.index = pd.to_datetime(df.index)
-                    df.index.name = "date"
-                    return df
+                    return _preparar_historico(df, intervalo, incluir_atual)
         except Exception:
             pass  # cache corrompido — re-baixa normalmente
 
     ultimo_erro = None
     for tentativa in range(1, tentativas + 1):
         try:
-            df = yf.download(ticker, period=periodo, interval=intervalo, progress=False)
-            if not df.empty:
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-                df = df.rename(columns=str.lower)
-                df.index.name = "date"
+            with _yf_lock:
+                df = yf.download(ticker, period=periodo, interval=intervalo,
+                                 auto_adjust=True, threads=False, timeout=15, progress=False)
+            if df is not None and not df.empty:
+                df = _preparar_historico(df, intervalo, incluir_atual)
                 # Grava cache diário
                 if usar_cache and intervalo == "1d":
                     try:
@@ -94,7 +160,12 @@ def baixar_dados(ticker: str, periodo: str = "1y", intervalo: str = "1d", tentat
             ultimo_erro = str(e)
 
         if tentativa < tentativas:
-            time.sleep(2 * tentativa)  # espera um pouco mais a cada nova tentativa
+            # Se for rate limit (429 / Too Many Requests), espera bem mais
+            if "rate" in ultimo_erro.lower() or "too many" in ultimo_erro.lower() or "429" in ultimo_erro:
+                espera = 15 * tentativa
+            else:
+                espera = 2 * tentativa
+            time.sleep(min(espera, 45))  # espera um pouco mais a cada nova tentativa
 
     raise ValueError(f"Não foi possível baixar dados para {ticker} após {tentativas} tentativas. Último erro: {ultimo_erro}")
 
@@ -104,6 +175,7 @@ def baixar_dados(ticker: str, periodo: str = "1y", intervalo: str = "1d", tentat
 # --------------------------------------------------------------------------
 
 def calcular_medias_moveis(df: pd.DataFrame) -> pd.DataFrame:
+    _validar_dados(df, ("close",))
     df["sma9"] = df["close"].rolling(9).mean()
     df["sma21"] = df["close"].rolling(21).mean()
     df["sma50"] = df["close"].rolling(50).mean()
@@ -115,18 +187,22 @@ def calcular_medias_moveis(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def calcular_rsi(df: pd.DataFrame, periodo: int = 14) -> pd.DataFrame:
+    _validar_dados(df, ("close",))
     delta = df["close"].diff()
     ganho = delta.clip(lower=0)
     perda = -delta.clip(upper=0)
-    media_ganho = ganho.ewm(alpha=1 / periodo, min_periods=periodo, adjust=False).mean()
-    media_perda = perda.ewm(alpha=1 / periodo, min_periods=periodo, adjust=False).mean()
+    media_ganho = _media_wilder(ganho, periodo)
+    media_perda = _media_wilder(perda, periodo)
     # Evita divisão por zero: se não houve perdas no período, RSI = 100
     rs = media_ganho / media_perda.replace(0, np.nan)
-    df["rsi"] = (100 - (100 / (1 + rs))).fillna(100)
+    rsi = 100 - (100 / (1 + rs))
+    rsi = rsi.mask((media_perda == 0) & (media_ganho > 0), 100)
+    df["rsi"] = rsi.mask((media_perda == 0) & (media_ganho == 0), 50)
     return df
 
 
 def calcular_macd(df: pd.DataFrame, rapida=12, lenta=26, sinal=9) -> pd.DataFrame:
+    _validar_dados(df, ("close",))
     ema_rapida = df["close"].ewm(span=rapida, adjust=False).mean()
     ema_lenta = df["close"].ewm(span=lenta, adjust=False).mean()
     df["macd"] = ema_rapida - ema_lenta
@@ -136,31 +212,35 @@ def calcular_macd(df: pd.DataFrame, rapida=12, lenta=26, sinal=9) -> pd.DataFram
 
 
 def calcular_estocastico(df: pd.DataFrame, periodo=14, suavizacao=3) -> pd.DataFrame:
+    _validar_dados(df)
     minima = df["low"].rolling(periodo).min()
     maxima = df["high"].rolling(periodo).max()
     faixa = (maxima - minima).replace(0, np.nan)  # evita divisão por zero em mercado plano
-    df["stoch_k"] = (100 * (df["close"] - minima) / faixa).fillna(50)
+    df["stoch_k"] = (100 * (df["close"] - minima) / faixa).mask(maxima == minima, 50)
     df["stoch_d"] = df["stoch_k"].rolling(suavizacao).mean()
     return df
 
 
 def calcular_vwap(df: pd.DataFrame, janela: int = 20) -> pd.DataFrame:
     """VWAP móvel (aproximado, base diária) para uso em swing trade."""
+    _validar_dados(df, ("high", "low", "close", "volume"))
     preco_tipico = (df["high"] + df["low"] + df["close"]) / 3
     pv = preco_tipico * df["volume"]
-    df["vwap"] = pv.rolling(janela).sum() / df["volume"].rolling(janela).sum()
+    df["vwap"] = pv.rolling(janela).sum() / df["volume"].rolling(janela).sum().replace(0, np.nan)
     return df
 
 
 def calcular_suporte_resistencia(df: pd.DataFrame, janela: int = 20) -> pd.DataFrame:
     """Suporte/resistência simples: mínima e máxima das últimas N sessões."""
+    _validar_dados(df)
     df["resistencia"] = df["high"].rolling(janela).max()
     df["suporte"] = df["low"].rolling(janela).min()
     return df
 
 
 def calcular_atr(df: pd.DataFrame, periodo: int = 14) -> pd.DataFrame:
-    """Average True Range — usado para dimensionar stop e alvo."""
+    """ATR com media simples (variante da estrategia de stop, nao o RMA do ADX)."""
+    _validar_dados(df)
     alta_baixa = df["high"] - df["low"]
     alta_fechamento = (df["high"] - df["close"].shift()).abs()
     baixa_fechamento = (df["low"] - df["close"].shift()).abs()
@@ -173,12 +253,14 @@ def calcular_force_index(df: pd.DataFrame, periodo: int = 13) -> pd.DataFrame:
     """Force Index — medida da força do movimento pelo volume e mudança de preço.
     Positive = pressão de compra, Negative = pressão de venda.
     A Média Móvel do Force Index mostra se a força está aumentando ou diminuindo."""
+    _validar_dados(df, ("close", "volume"))
     df["force_index"] = (df["close"] - df["close"].shift(1)) * df["volume"]
     df["force_ma"] = df["force_index"].rolling(periodo).mean()
     return df
 
 
 def calcular_indicadores(df: pd.DataFrame) -> pd.DataFrame:
+    _validar_dados(df, ("open", "high", "low", "close", "volume"))
     df = calcular_medias_moveis(df)
     df = calcular_rsi(df)
     df = calcular_macd(df)
@@ -202,7 +284,8 @@ def determinar_veredito(score: int, direcao: str, nivel_entrar: int = 8, nivel_o
 
     Retorna dict com veredito, emoji e descrição pra usar no relatório.
     """
-    if direcao == "neutro":
+    if (direcao not in ("compra", "venda") or not isinstance(score, (int, float, np.number))
+            or not np.isfinite(score) or not 0 <= score <= 10):
         return {"veredito": "SEM SINAL", "emoji": "⚪", "descricao": "Sem confluência técnica — não operar"}
 
     if score >= nivel_entrar:
@@ -227,9 +310,15 @@ def sugerir_stop_alvo(df: pd.DataFrame, direcao: str, atr_mult: float = 1.5, ris
                    ativos em forte tendência (onde o suporte/resistência de 20 dias
                    fica muito longe do preço) gerem stops enormes e desproporcionais.
     """
+    if direcao not in ("compra", "venda") or df.empty:
+        raise ValueError("Direcao invalida ou historico vazio")
     ultimo = df.iloc[-1]
     preco = ultimo["close"]
     atr = ultimo["atr"]
+    referencia = ultimo["suporte"] if direcao == "compra" else ultimo["resistencia"]
+    valores = [preco, atr, referencia, atr_mult, risco_retorno, risco_maximo_atr_mult]
+    if not np.isfinite(valores).all() or min(valores) <= 0:
+        raise ValueError("Stop/alvo requer precos, ATR e multiplicadores positivos e finitos")
 
     if direcao == "compra":
         stop = min(ultimo["suporte"], preco - atr_mult * atr)
@@ -244,11 +333,16 @@ def sugerir_stop_alvo(df: pd.DataFrame, direcao: str, atr_mult: float = 1.5, ris
         risco = stop - preco
         alvo = preco - risco_retorno * risco
 
+    preco, stop, alvo = round(preco, 2), round(stop, 2), round(alvo, 2)
+    if not np.isfinite([preco, stop, alvo]).all() or not (
+        0 < stop < preco < alvo if direcao == "compra" else 0 < alvo < preco < stop
+    ):
+        raise ValueError("Stop/alvo invalido apos arredondamento")
     return {
-        "preco_entrada": round(preco, 2),
+        "preco_entrada": preco,
         "stop": round(stop, 2),
         "alvo": round(alvo, 2),
-        "risco_por_acao": round(abs(risco), 2),
+        "risco_por_acao": round(abs(preco - stop), 2),
         "relacao_risco_retorno": f"1:{risco_retorno:g}",
     }
 
@@ -269,13 +363,17 @@ def projetar_volume_dia_atual(df: pd.DataFrame, hora_abertura: float = 10.0, hor
     na abertura e no fechamento) — melhor que ignorar o problema, mas não é
     uma correção perfeita.
     """
-    from datetime import datetime, timedelta
-
     if df.empty:
         return df
 
-    agora_brt = datetime.utcnow() - timedelta(hours=3)  # Brasília = UTC-3 (sem horário de verão)
-    ultima_data = df.index[-1].date()
+    _validar_dados(df, ("volume",))
+    if not isinstance(df.index, pd.DatetimeIndex):
+        raise ValueError("Projecao requer indice temporal")
+    if not 0 <= hora_abertura < hora_fechamento <= 24:
+        raise ValueError("Horario de pregao invalido")
+    agora_brt = pd.Timestamp.now(tz="America/Sao_Paulo")
+    ultima = df.index[-1]
+    ultima_data = (ultima.tz_convert("America/Sao_Paulo") if ultima.tzinfo else ultima).date()
 
     if ultima_data != agora_brt.date():
         return df  # última barra já é de um pregão fechado, não precisa projetar
@@ -287,6 +385,7 @@ def projetar_volume_dia_atual(df: pd.DataFrame, hora_abertura: float = 10.0, hor
     fracao_decorrida = max((hora_atual - hora_abertura) / (hora_fechamento - hora_abertura), 0.05)
 
     df = df.copy()
+    df["volume"] = df["volume"].astype(float)
     df.iloc[-1, df.columns.get_loc("volume")] = df["volume"].iloc[-1] / fracao_decorrida
     return df
 
@@ -303,6 +402,7 @@ def avaliar_timeframe_horario(ticker: str, periodo: str = "5d") -> dict:
     """
     try:
         df_h = baixar_dados(ticker, periodo=periodo, intervalo="60m")
+        df_h = _preparar_historico(df_h, "60m")
     except Exception:
         return {"direcao": "indisponivel", "motivo": "Dados intradiários indisponíveis"}
 
@@ -312,13 +412,7 @@ def avaliar_timeframe_horario(ticker: str, periodo: str = "5d") -> dict:
     df_h["ema9"] = df_h["close"].ewm(span=9, adjust=False).mean()
     df_h["ema21"] = df_h["close"].ewm(span=21, adjust=False).mean()
 
-    delta = df_h["close"].diff()
-    ganho = delta.clip(lower=0)
-    perda = -delta.clip(upper=0)
-    media_ganho = ganho.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
-    media_perda = perda.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
-    rs = media_ganho / media_perda
-    df_h["rsi_h"] = 100 - (100 / (1 + rs))
+    df_h["rsi_h"] = calcular_rsi(df_h.copy())["rsi"]
 
     ultimo = df_h.iloc[-1]
     tendencia_alta = ultimo["close"] > ultimo["ema9"] > ultimo["ema21"]
@@ -347,17 +441,12 @@ def calcular_indicadores_curto_prazo(df: pd.DataFrame) -> pd.DataFrame:
     conflitar com os indicadores padrão (usados no gráfico e no relatório
     da manhã).
     """
+    _validar_dados(df, ("open", "high", "low", "close", "volume"))
     df["sma5_curto"] = df["close"].rolling(5).mean()
     df["sma10_curto"] = df["close"].rolling(10).mean()
     df["sma20_curto"] = df["close"].rolling(20).mean()
 
-    delta = df["close"].diff()
-    ganho = delta.clip(lower=0)
-    perda = -delta.clip(upper=0)
-    media_ganho = ganho.ewm(alpha=1 / 7, min_periods=7, adjust=False).mean()
-    media_perda = perda.ewm(alpha=1 / 7, min_periods=7, adjust=False).mean()
-    rs = media_ganho / media_perda
-    df["rsi_curto"] = 100 - (100 / (1 + rs))
+    df["rsi_curto"] = calcular_rsi(df.copy(), 7)["rsi"]
 
     ema_rapida = df["close"].ewm(span=5, adjust=False).mean()
     ema_lenta = df["close"].ewm(span=13, adjust=False).mean()
@@ -367,7 +456,7 @@ def calcular_indicadores_curto_prazo(df: pd.DataFrame) -> pd.DataFrame:
 
     minima = df["low"].rolling(7).min()
     maxima = df["high"].rolling(7).max()
-    df["stoch_k_curto"] = 100 * (df["close"] - minima) / (maxima - minima)
+    df["stoch_k_curto"] = (100 * (df["close"] - minima) / (maxima - minima).replace(0, np.nan)).mask(maxima == minima, 50)
 
     alta_baixa = df["high"] - df["low"]
     alta_fechamento = (df["high"] - df["close"].shift()).abs()
@@ -389,6 +478,14 @@ def avaliar_ativo_curto_prazo(df: pd.DataFrame) -> dict:
     tendência, não reversão. Rompimento com volume = compra/venda conforme
     a direção do rompimento, não o oposto.
     """
+    _validar_dados(df, ("close", "volume"))
+    colunas = ["sma5_curto", "sma10_curto", "sma20_curto", "rsi_curto",
+               "macd_curto", "macd_sinal_curto", "macd_hist_curto", "atr_curto",
+               "stoch_k_curto", "resistencia_curta", "suporte_curto"]
+    anteriores = ["macd_hist_curto", "resistencia_curta", "suporte_curto"]
+    if (len(df) < 20 or not np.isfinite(df[colunas].iloc[-1].to_numpy(dtype=float)).all()
+            or not np.isfinite(df[anteriores].iloc[-2].to_numpy(dtype=float)).all()):
+        raise ValueError("Indicadores de curto prazo insuficientes ou invalidos")
     ultimo = df.iloc[-1]
     penultimo = df.iloc[-2] if len(df) > 1 else ultimo
 
@@ -454,7 +551,7 @@ def avaliar_ativo_curto_prazo(df: pd.DataFrame) -> dict:
 
     if diff_macd is None or hist_cresceu is None:
         pass  # dados insuficientes pro MACD rápido — não pontua
-    elif abs(diff_macd) < zona_morta_macd:
+    elif diff_macd == 0 or abs(diff_macd) < zona_morta_macd:
         pass
     elif diff_macd > 0:
         pts = 2 if hist_cresceu else 1
@@ -584,6 +681,15 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
       de reversão à média (sobrecompra perto da resistência = venda,
       sobrevenda perto do suporte = compra).
     """
+    _validar_dados(df, ("close", "volume"))
+    colunas = ["sma21", "sma50", "rsi", "macd", "macd_sinal", "macd_hist",
+               "atr", "stoch_k", "resistencia", "suporte"]
+    anteriores = ["macd_hist", "resistencia", "suporte"]
+    if (len(df) < 50 or not np.isfinite(df[colunas].iloc[-1].to_numpy(dtype=float)).all()
+            or not np.isfinite(df[anteriores].iloc[-2].to_numpy(dtype=float)).all()):
+        raise ValueError("Indicadores insuficientes ou invalidos")
+    if np.isinf(df["sma200"].iloc[-1]) or (len(df) >= 200 and pd.isna(df["sma200"].iloc[-1])):
+        raise ValueError("SMA200 invalida")
     ultimo = df.iloc[-1]
     penultimo = df.iloc[-2] if len(df) > 1 else ultimo
 
@@ -663,7 +769,7 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
 
     if diff_macd is None or hist_cresceu is None:
         pass  # dados insuficientes pro MACD — não pontua nem compra nem venda
-    elif abs(diff_macd) < zona_morta_macd:
+    elif diff_macd == 0 or abs(diff_macd) < zona_morta_macd:
         pass
     elif diff_macd > 0:
         pts = 2 if hist_cresceu else 1
@@ -802,6 +908,7 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
         else False
     )
 
+    teto_score = 10
     # Exaustão de COMPRA: tendência de alta esticada
     exaustao_compra = (
         em_alta
@@ -816,6 +923,7 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
     )
 
     if exaustao_compra and direcao == "compra":
+        teto_score = 7
         score = min(score, 7)  # nunca dá ENTRAR (>= 8) em topo esticado
         motivos.append(
             f"⚠️ Exaustão de alta: RSI {rsi:.0f} com {dias_altas_seguidas} dias de alta "
@@ -823,12 +931,14 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
         )
     if volume_alto_sem_avancar and direcao == "compra" and em_alta:
         if score >= 8:
+            teto_score = 7
             score = min(score, 7)
             motivos.append(
                 "⚠️ Volume alto com preço sem avançar (distribuição) — risco de reversão. Placar limitado a 7/10."
             )
 
     if exaustao_venda and direcao == "venda":
+        teto_score = 7
         score = min(score, 7)
         motivos.append(
             f"⚠️ Exaustão de baixa: RSI {rsi:.0f} com queda prolongada sem repique — "
@@ -841,6 +951,7 @@ def avaliar_ativo(df: pd.DataFrame) -> dict:
         "motivos": motivos,
         "preco_atual": ultimo["close"],
         "data": df.index[-1],
+        "teto_score": teto_score,
     }
 
 
@@ -855,9 +966,16 @@ def calcular_adx(df: pd.DataFrame, periodo: int = 14) -> float:
     ADX > 25 = tendência em andamento.
     Retorna NaN se dados insuficientes.
     """
-    if len(df) < periodo * 2 + 1:
-        return float("nan")
+    return _calcular_adx_di(df, periodo)[0]
+
+
+def _calcular_adx_di(df: pd.DataFrame, periodo: int = 14) -> tuple:
+    """Wilder comum ao ADX e aos DIs; primeiro ADX na barra 2*N-1 (base zero)."""
+    indisponivel = (float("nan"),) * 3
     try:
+        if not isinstance(periodo, int) or periodo < 1 or len(df) < 2 * periodo:
+            return indisponivel
+        _validar_dados(df)
         high = df["high"].astype(float)
         low = df["low"].astype(float)
         close = df["close"].astype(float)
@@ -867,22 +985,23 @@ def calcular_adx(df: pd.DataFrame, periodo: int = 14) -> float:
 
         plus_dm = up.where((up > dn) & (up > 0), 0.0)
         minus_dm = dn.where((dn > up) & (dn > 0), 0.0)
+        plus_dm.iloc[0] = minus_dm.iloc[0] = np.nan
 
         tr1 = high - low
         tr2 = (high - close.shift()).abs()
         tr3 = (low - close.shift()).abs()
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-
-        atr = tr.rolling(periodo).mean()
-        pdi = 100 * plus_dm.rolling(periodo).mean() / atr
-        ndi = 100 * minus_dm.rolling(periodo).mean() / atr
+        tr.iloc[0] = np.nan
+        atr = _media_wilder(tr, periodo)
+        pdi = (100 * _media_wilder(plus_dm, periodo) / atr.replace(0, np.nan)).mask(atr == 0, 0)
+        ndi = (100 * _media_wilder(minus_dm, periodo) / atr.replace(0, np.nan)).mask(atr == 0, 0)
 
         soma = pdi + ndi
-        dx = 100 * (pdi - ndi).abs() / soma.replace(0, np.nan)
-        adx = dx.rolling(periodo).mean()
-        return float(adx.iloc[-1])
-    except Exception:
-        return float("nan")
+        dx = (100 * (pdi - ndi).abs() / soma.replace(0, np.nan)).mask(soma == 0, 0)
+        adx = _media_wilder(dx, periodo)
+        return float(adx.iloc[-1]), float(pdi.iloc[-1]), float(ndi.iloc[-1])
+    except (ValueError, TypeError, KeyError):
+        return indisponivel
 
 
 def calcular_eficiencia(serie: pd.Series, n: int = 10) -> float:
@@ -892,15 +1011,104 @@ def calcular_eficiencia(serie: pd.Series, n: int = 10) -> float:
     (choppy/lateral).
     """
     try:
-        if len(serie) <= n:
-            return 0.0
+        if not isinstance(n, int) or n < 1 or len(serie) <= n:
+            return float("nan")
+        if not np.isfinite(serie.iloc[-n - 1:].to_numpy(dtype=float)).all():
+            return float("nan")
         movimento_liq = abs(serie.iloc[-1] - serie.iloc[-1 - n])
         movimento_total = serie.diff().abs().iloc[-n:].sum()
         if movimento_total <= 0:
             return 0.0
         return float(movimento_liq / movimento_total)
-    except Exception:
-        return 0.0
+    except (ValueError, TypeError):
+        return float("nan")
+
+
+def comparar_forca_relativa(df_ativo: pd.DataFrame, serie_ibov: pd.Series,
+                            *, agora=None) -> dict:
+    """Compara retornos de 5/10 sessoes, sem IO, mutacao ou consulta ao relogio.
+
+    Sem agora, as entradas devem conter somente sessoes fechadas. Com agora,
+    exclui hoje (mesma politica conservadora do diario) e rejeita defasagem
+    superior a 4 dias corridos. O screener sempre fornece essa referencia.
+    Exige as ultimas 11 datas iguais, sem dropna/intersecao que comprima gaps.
+    Retornos em %, diferenciais ativo menos IBOV em pontos percentuais.
+    Limiar estrito zero e uma hipotese para candidatos de curto prazo (<=30d),
+    nao calibrada por backtest nem promessa de desempenho ou sinal de entrada.
+    """
+    resultado = {
+        "disponivel": False, "alinhada": {"compra": False, "venda": False},
+        "retorno_ativo_5d": None, "retorno_ativo_10d": None,
+        "retorno_ibov_5d": None, "retorno_ibov_10d": None,
+        "diferenca_5d_pp": None, "diferenca_10d_pp": None,
+        "data_final": None, "observacoes": 0, "motivo": "",
+    }
+    try:
+        if (not isinstance(df_ativo, pd.DataFrame) or not df_ativo.columns.is_unique
+                or "close" not in df_ativo or not isinstance(serie_ibov, pd.Series)):
+            raise ValueError("Historicos de fechamento ausentes ou invalidos")
+        referencia = None
+        if agora is not None:
+            referencia = pd.Timestamp(agora)
+            if pd.isna(referencia):
+                raise ValueError("Data de referencia invalida")
+            if referencia.tzinfo is not None:
+                referencia = referencia.tz_convert("America/Sao_Paulo").tz_localize(None)
+            referencia = referencia.normalize()
+        series = []
+        for original in (df_ativo["close"], serie_ibov):
+            if not isinstance(original.index, pd.DatetimeIndex):
+                raise ValueError("Historico sem indice temporal")
+            serie = original.copy()
+            if serie.index.tz is not None:
+                serie.index = serie.index.tz_convert("America/Sao_Paulo").tz_localize(None)
+            serie.index = serie.index.normalize()
+            if (serie.index.hasnans or not serie.index.is_unique
+                    or not serie.index.is_monotonic_increasing):
+                raise ValueError("Datas devem ser crescentes, unicas e validas")
+            if referencia is not None:
+                if (serie.index > referencia).any():
+                    raise ValueError("Historico contem datas futuras")
+                serie = serie.loc[serie.index < referencia]
+            if len(serie) < 11:
+                raise ValueError("Necessarias 11 observacoes fechadas em cada historico")
+            if (not pd.api.types.is_numeric_dtype(serie.dtype)
+                    or pd.api.types.is_bool_dtype(serie.dtype)
+                    or pd.api.types.is_complex_dtype(serie.dtype)):
+                raise ValueError("Fechamentos devem ser numericos reais")
+            valores = serie.to_numpy(dtype=float, na_value=np.nan)
+            if not np.isfinite(valores).all() or (valores <= 0).any():
+                raise ValueError("Fechamentos devem ser positivos e finitos, sem lacunas")
+            series.append(serie.iloc[-11:])
+        ativo, ibov = series
+        if not ativo.index.equals(ibov.index):
+            raise ValueError("Ultimas 11 datas devem coincidir, inclusive o ultimo fechamento")
+        if referencia is not None and (referencia - ativo.index[-1]).days > 4:
+            raise ValueError("Ultimo fechamento defasado mais de 4 dias corridos")
+        retornos = {}
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            for janela in (5, 10):
+                ra = float((ativo.iloc[-1] / ativo.iloc[-1 - janela] - 1) * 100)
+                ri = float((ibov.iloc[-1] / ibov.iloc[-1 - janela] - 1) * 100)
+                if not np.isfinite([ra, ri, ra - ri]).all():
+                    raise ValueError("Retornos nao finitos")
+                retornos.update({f"retorno_ativo_{janela}d": ra,
+                                 f"retorno_ibov_{janela}d": ri,
+                                 f"diferenca_{janela}d_pp": ra - ri})
+        resultado.update(retornos)
+        a5 = retornos["retorno_ativo_5d"]
+        d5, d10 = retornos["diferenca_5d_pp"], retornos["diferenca_10d_pp"]
+        resultado.update({
+            "disponivel": True,
+            "alinhada": {"compra": a5 > 0 and d5 > 0 and d10 > 0,
+                         "venda": a5 < 0 and d5 < 0 and d10 < 0},
+            "data_final": ativo.index[-1].date().isoformat(), "observacoes": 11,
+            "motivo": (f"Ativo 5d {a5:+.2f}%; IBOV 5d {retornos['retorno_ibov_5d']:+.2f}%; "
+                       f"diferencial 5d {d5:+.2f} p.p. / 10d {d10:+.2f} p.p."),
+        })
+    except (ValueError, TypeError, KeyError, OverflowError) as erro:
+        resultado["motivo"] = str(erro)
+    return resultado
 
 
 def classificar_regime_ibov(adx: float, di_pos: float, di_neg: float,
@@ -913,23 +1121,25 @@ def classificar_regime_ibov(adx: float, di_pos: float, di_neg: float,
     Regras:
       - 🟢 ALTA:   ADX > 22, DI+ > DI-, eficiência > 0.5, preço > SMA50
       - 🔴 BAIXA:  ADX > 22, DI- > DI+, eficiência > 0.5, preço < SMA50
-      - 🟡 LATERAL: caso contrário (tendência fraca ou choppy)
+      - LATERAL: tendencia fraca ou choppy; CONFLITO: forca sem alinhamento direcional.
     """
-    adx_ok = adx == adx  # not NaN
-    if not adx_ok or not (eficiencia_10d == eficiencia_10d):
+    metricas = [adx, di_pos, di_neg, eficiencia_10d, dist_sma50_pct, var_5d, var_20d]
+    if (not all(isinstance(v, (int, float, np.number)) and np.isfinite(v) for v in metricas)
+            or not 0 <= adx <= 100 or not 0 <= eficiencia_10d <= 1
+            or not 0 <= di_pos <= 100 or not 0 <= di_neg <= 100):
         return {
             "regime": "indisponivel",
             "tetos": {"compra": 10, "venda": 10},
             "texto_curto": "⚪ INDISPONÍVEL",
-            "texto_aviso": "",
+            "texto_aviso": "Dados do Ibovespa indisponiveis; filtro de regime nao aplicado.",
         }
 
-    teto_lateral = 7  # nunca ENTRAR (>=8) em mercado sem direção
+    teto_restritivo = 7  # conflito e operacoes contra a tendencia maior
     if adx > 22 and eficiencia_10d > 0.5:
         if di_pos > di_neg and dist_sma50_pct > 0:
             return {
                 "regime": "alta",
-                "tetos": {"compra": 10, "venda": teto_lateral},
+                "tetos": {"compra": 10, "venda": teto_restritivo},
                 "texto_curto": (
                     f"🟢 ALTA (ADX {adx:.0f}, eficiência {eficiencia_10d:.2f}, "
                     f"5d {var_5d:+.1f}% / 20d {var_20d:+.1f}%)"
@@ -939,7 +1149,7 @@ def classificar_regime_ibov(adx: float, di_pos: float, di_neg: float,
         if di_neg > di_pos and dist_sma50_pct < 0:
             return {
                 "regime": "baixa",
-                "tetos": {"compra": teto_lateral, "venda": 10},
+                "tetos": {"compra": teto_restritivo, "venda": 10},
                 "texto_curto": (
                     f"🔴 BAIXA (ADX {adx:.0f}, eficiência {eficiencia_10d:.2f}, "
                     f"5d {var_5d:+.1f}% / 20d {var_20d:+.1f}%)"
@@ -947,16 +1157,25 @@ def classificar_regime_ibov(adx: float, di_pos: float, di_neg: float,
                 "texto_aviso": "Mercado em baixa — compras limitadas a 7/10.",
             }
 
+        return {
+            "regime": "conflito",
+            "tetos": {"compra": teto_restritivo, "venda": teto_restritivo},
+            "texto_curto": f"CONFLITO (ADX {adx:.0f}, eficiencia {eficiencia_10d:.2f})",
+            "texto_aviso": "Forca direcional sem alinhamento entre DI e SMA50; compras e vendas limitadas a 7/10.",
+        }
+
     return {
         "regime": "lateral",
-        "tetos": {"compra": teto_lateral, "venda": teto_lateral},
+        "tetos": {"compra": 10, "venda": 10},
         "texto_curto": (
             f"🟡 LATERAL (ADX {adx:.0f}, eficiência {eficiencia_10d:.2f}, "
             f"5d {var_5d:+.1f}% / 20d {var_20d:+.1f}%)"
         ),
         "texto_aviso": (
-            "Mercado sem direção (choppy) — compras e vendas limitadas a 7/10. "
-            "Sinais de rompimento tendem a falhar."
+            "Mercado lateral: teto 10 apenas condicional por ativo, sem bonus de score. "
+            "Compra exige retorno proprio 5d positivo e superar IBOV em 5d e 10d; "
+            "venda exige o espelho negativo. Sem confirmacao, teto 7/10. "
+            "Setup e demais filtros de entrada continuam obrigatorios."
         ),
     }
 
@@ -966,40 +1185,8 @@ def baixar_dados_ibov(periodo: str = "1y") -> pd.DataFrame | None:
     Baixa o Ibovespa (^BVSP) via yfinance com cache diário.
     Retorna None se falhar. Colunas em minúsculas (close/high/low/volume).
     """
-    import datetime
-    import os
-    import pickle
-    import yfinance as yf
-
-    cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
-    cache_file = os.path.join(cache_dir, "^BVSP_ibov.pkl")
     try:
-        if os.path.exists(cache_file):
-            mod_time = datetime.datetime.fromtimestamp(os.path.getmtime(cache_file)).date()
-            if mod_time == datetime.date.today():
-                with open(cache_file, "rb") as f:
-                    df = pickle.load(f)
-                df.index = pd.to_datetime(df.index)
-                df.index.name = "date"
-                return df
-    except Exception:
-        pass
-
-    try:
-        df = yf.download("^BVSP", period=periodo, interval="1d", progress=False)
-        if df is None or df.empty:
-            return None
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df = df.rename(columns=str.lower)
-        df.index.name = "date"
-        try:
-            os.makedirs(cache_dir, exist_ok=True)
-            with open(cache_file, "wb") as f:
-                pickle.dump(df, f)
-        except Exception:
-            pass
-        return df
+        return baixar_dados("^BVSP", periodo=periodo)
     except Exception:
         return None
 
@@ -1008,19 +1195,27 @@ def avaliar_regime_ibov(periodo: str = "1y") -> dict:
     """
     Avalia o regime de mercado (Ibovespa) completo.
     Retorna dict com regime, métricas, tetos de score e textos formatados.
+    historico_fechamentos e uma Series interna; nao serializar o dict inteiro
+    como contexto de IA, usar somente os textos selecionados.
     Em caso de falha, retorna regime 'indisponivel' (sem filtro).
     """
-    df = baixar_dados_ibov(periodo)
+    try:
+        df = baixar_dados_ibov(periodo)
+        if df is not None:
+            _validar_dados(df)
+    except (ValueError, TypeError, KeyError):
+        df = None
     if df is None or len(df) < 60:
         return {
             "regime": "indisponivel",
             "tetos": {"compra": 10, "venda": 10},
             "texto_curto": "⚪ INDISPONÍVEL",
-            "texto_aviso": "",
+            "texto_aviso": "Dados do Ibovespa indisponiveis; filtro de regime nao aplicado.",
             "adx": None, "di_pos": None, "di_neg": None,
             "eficiencia_5d": None, "eficiencia_10d": None,
             "var_5d": None, "var_20d": None, "dist_sma200_pct": None,
             "dist_sma50_pct": None,
+            "historico_fechamentos": None,
         }
 
     close = df["close"].astype(float)
@@ -1028,31 +1223,14 @@ def avaliar_regime_ibov(periodo: str = "1y") -> dict:
     sma50 = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else float("nan")
     sma200 = float(close.rolling(200).mean().iloc[-1]) if len(close) >= 200 else float("nan")
 
-    adx = calcular_adx(df)
+    adx, di_pos, di_neg = _calcular_adx_di(df)
     eficiencia_5d = calcular_eficiencia(close, 5)
     eficiencia_10d = calcular_eficiencia(close, 10)
 
-    # DI+/DI- do cálculo do ADX (últimos valores)
-    di_pos, di_neg = float("nan"), float("nan")
-    if len(df) > 14 * 2:
-        high = df["high"].astype(float)
-        low = df["low"].astype(float)
-        up = high.diff()
-        dn = -low.diff()
-        plus_dm = up.where((up > dn) & (up > 0), 0.0)
-        minus_dm = dn.where((dn > up) & (dn > 0), 0.0)
-        tr1 = high - low
-        tr2 = (high - df["close"].astype(float).shift()).abs()
-        tr3 = (low - df["close"].astype(float).shift()).abs()
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        atr = tr.rolling(14).mean()
-        di_pos = float((100 * plus_dm.rolling(14).mean() / atr).iloc[-1])
-        di_neg = float((100 * minus_dm.rolling(14).mean() / atr).iloc[-1])
-
     var_5d = (ultimo / float(close.iloc[-6]) - 1) * 100 if len(close) > 6 else 0.0
     var_20d = (ultimo / float(close.iloc[-21]) - 1) * 100 if len(close) > 21 else 0.0
-    dist_sma50_pct = (ultimo / sma50 - 1) * 100 if sma50 == sma50 and sma50 > 0 else 0.0
-    dist_sma200_pct = (ultimo / sma200 - 1) * 100 if sma200 == sma200 and sma200 > 0 else 0.0
+    dist_sma50_pct = (ultimo / sma50 - 1) * 100 if np.isfinite(sma50) and sma50 > 0 else float("nan")
+    dist_sma200_pct = (ultimo / sma200 - 1) * 100 if np.isfinite(sma200) and sma200 > 0 else None
 
     classificacao = classificar_regime_ibov(
         adx, di_pos, di_neg, eficiencia_10d, dist_sma50_pct, var_5d, var_20d,
@@ -1063,6 +1241,7 @@ def avaliar_regime_ibov(periodo: str = "1y") -> dict:
         "var_5d": var_5d, "var_20d": var_20d,
         "dist_sma50_pct": dist_sma50_pct, "dist_sma200_pct": dist_sma200_pct,
         "preco_ibov": ultimo,
+        "historico_fechamentos": close.copy(),
     })
     return classificacao
 
@@ -1093,26 +1272,23 @@ def plotar_grafico(df: pd.DataFrame, ticker: str, caminho_saida: str):
         df_mpf.columns = ["Open", "High", "Low", "Close", "Volume"]
         df_mpf.index = pd.DatetimeIndex(df_mpf.index)
 
-        def safe(s, default=0):
-            return s.bfill().ffill().fillna(default)
-
-        preco_ref = float(df["close"].iloc[-1])
-
         # Figura mais larga quando há mais dados, pra IA ler os candles sem apertar
         largura_fig = 16 if len(df_mpf) > 350 else 14
 
         plots_extras = [
-            mpf.make_addplot(safe(df_plot["sma21"], preco_ref), color="#ff7f0e", width=1.2),
-            mpf.make_addplot(safe(df_plot["sma50"], preco_ref), color="#2ca02c", width=1.0),
-            mpf.make_addplot(safe(df_plot["sma200"],preco_ref), color="#d62728", width=0.8),
-            mpf.make_addplot(safe(df_plot["suporte"],  preco_ref), color="green", linestyle=":", width=0.8),
-            mpf.make_addplot(safe(df_plot["resistencia"], preco_ref), color="red",  linestyle=":", width=0.8),
-            mpf.make_addplot(safe(df_plot["rsi"], 50),         panel=1, color="blue",   width=0.9, ylabel="RSI"),
-            mpf.make_addplot([70] * len(df_plot),              panel=1, color="red",    linestyle="--", width=0.5),
-            mpf.make_addplot([30] * len(df_plot),              panel=1, color="green",  linestyle="--", width=0.5),
-            mpf.make_addplot(safe(df_plot["macd"]),            panel=2, color="blue",   width=0.9, ylabel="MACD"),
-            mpf.make_addplot(safe(df_plot["macd_sinal"]),      panel=2, color="orange", width=0.9),
+            mpf.make_addplot(df_plot["sma21"], color="#ff7f0e", width=1.2),
+            mpf.make_addplot(df_plot["sma50"], color="#2ca02c", width=1.0),
+            mpf.make_addplot(df_plot["sma200"], color="#d62728", width=0.8),
+            mpf.make_addplot(df_plot["suporte"], color="green", linestyle=":", width=0.8),
+            mpf.make_addplot(df_plot["resistencia"], color="red", linestyle=":", width=0.8),
+            mpf.make_addplot(df_plot["rsi"], panel=2, color="blue", width=0.9, ylabel="RSI"),
+            mpf.make_addplot([70] * len(df_plot), panel=2, color="red", linestyle="--", width=0.5),
+            mpf.make_addplot([30] * len(df_plot), panel=2, color="green", linestyle="--", width=0.5),
+            mpf.make_addplot(df_plot["macd"], panel=3, color="blue", width=0.9, ylabel="MACD"),
+            mpf.make_addplot(df_plot["macd_sinal"], panel=3, color="orange", width=0.9),
         ]
+        # Mantem NaN no aquecimento e omite medias ainda inteiramente indisponiveis.
+        plots_extras = [p for p in plots_extras if np.isfinite(np.asarray(p["data"], dtype=float)).any()]
 
         mc = mpf.make_marketcolors(
             up="green", down="red",
@@ -1132,7 +1308,7 @@ def plotar_grafico(df: pd.DataFrame, ticker: str, caminho_saida: str):
             style=estilo,
             volume=True,
             addplot=plots_extras,
-            panel_ratios=(4, 1, 1),
+            panel_ratios=(4, 1, 1, 1),
             figsize=(largura_fig, 10),
             title=f"\n{ticker} — Análise Técnica (Swing Trade)",
             returnfig=True,

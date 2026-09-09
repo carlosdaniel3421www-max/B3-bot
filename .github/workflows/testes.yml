@@ -11,9 +11,12 @@ permissions:
 jobs:
   testes:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Baixar o código
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Configurar Python
         uses: actions/setup-python@v5

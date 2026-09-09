@@ -1,47 +1,88 @@
 """
 Servidor 24/7 com webhook Telegram — roda no Render, Replit ou qualquer servidor.
-Responde comandos INSTANTANEAMENTE (sem delay de 5 min do GitHub Actions).
+Recebe comandos sem o intervalo de polling do GitHub Actions.
 
 Configuração (secrets no Render/Replit):
     TELEGRAM_TOKEN      (obrigatório) — token do seu bot
     TELEGRAM_CHAT_ID    (obrigatório) — seu chat id (só você pode usar)
     GEMINI_API_KEY      (opcional, para IA)
     CARLOS              (opcional, para Nemotron)
+
+Deploy existente: render_start.sh e .replit executam este arquivo diretamente.
+TELEGRAM_WEBHOOK_SECRET e opcional (1-256 caracteres A-Z, a-z, 0-9, _ e -).
+Ao defini-lo, reinicie o servidor: setWebhook registra secret_token e /webhook
+passa a exigir X-Telegram-Bot-Api-Secret-Token. Durante a troca, entregas com o
+segredo anterior recebem 403 e o Telegram tenta novamente. Sem essa variavel,
+o deploy legado continua funcionando, mas chat_id NAO autentica a origem:
+quem souber o chat pode forjar updates. Chat ausente/invalido sempre bloqueia.
+WEBHOOK_URL (HTTPS, com ou sem /webhook) prevalece sobre a URL do provedor.
+REPLIT_DEV_DOMAIN pode ser apenas o hostname. Nao use polling simultaneamente.
+
+Use uma unica instancia/processo. ACK 200 imediatamente apos enfileirar,
+sem aguardar IA/envio. Fila em memoria: 32 aguardando e um unico worker de
+negocio. Fila cheia retorna 503 antes de aceitar. Dedup atomico preserva
+pendentes/em execucao e retém ate 100 updates, incluindo os concluidos.
+Excecao de negocio gera um aviso, sem repetir a analise; envio tem no maximo
+3 tentativas no worker, com intervalo de 1 segundo. Falha final e terminal,
+sem reenfileirar em reentregas do Telegram enquanto estiver no cache.
+NAO ha exactly-once nem fila duravel: reinicio perde comandos ja confirmados
+e o cache de dedup; reentregas apos reinicio/expulsao podem duplicar efeitos.
+Timeout de envio e resposta multipartes podem duplicar mensagens/blocos.
+IA travada ocupa o unico worker, mas nao bloqueia ACK nem health HTTP.
+/health e liveness local rapido, sem Telegram (usar no Render).
+/ready valida startup e consulta getWebhookInfo (nao testa IA/persistencia).
+Importar app via WSGI nao executa restauracao/registro e deixa ready indisponivel;
+o comando de deploy suportado continua sendo python servidor_api.py.
+GITHUB_TOKEN continua opcional; sem ele o disco efemero nao tem restauracao
+remota. Com token, erro de download/validacao interrompe startup em vez de
+servir estado possivelmente desatualizado; 404 mantem o comportamento legado.
 """
 
+import hmac
 import json
 import logging
 import os
-import sys
+import queue
+import re
+import tempfile
 import threading
+import time
+from urllib.parse import urlsplit
 
 from flask import Flask, request, jsonify
 
 import config
 from telegram_bot import processar_comando
+from telegram_utils import enviar_mensagem
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-TOKEN = getattr(config, "TELEGRAM_TOKEN", "")
-CHAT_ID_AUTORIZADO = str(getattr(config, "TELEGRAM_CHAT_ID", ""))
-
-if not TOKEN:
-    logger.error("TELEGRAM_TOKEN não configurado! Configure como secret no Render.")
-    sys.exit(1)
-
-if not CHAT_ID_AUTORIZADO:
-    logger.warning("TELEGRAM_CHAT_ID não configurado! O servidor responderá QUALQUER pessoa.")
-    logger.warning("Para segurança, configure TELEGRAM_CHAT_ID como secret no Render.")
+TOKEN = str(getattr(config, "TELEGRAM_TOKEN", "") or "").strip()
+CHAT_ID_AUTORIZADO = str(getattr(config, "TELEGRAM_CHAT_ID", "") or "").strip()
+WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
 
 WEBHOOK_URL = ""  # será preenchido ao iniciar
+_estado_pronto = False
 
-# Guarda update_ids já processados (chave -> timestamp) para ignorar
-# re-entregas do Telegram quando a resposta da primeira chamada demora.
+# Estados: pendente -> em_execucao -> enviado ou falha_envio (terminal).
 _processados = {}
 _MAX_RECENTES = 100
+_comando_lock = threading.Lock()
+_fila = queue.Queue(maxsize=32)
+_worker = None
+_MAX_TENTATIVAS_ENVIO = 3
+_INTERVALO_RETRY = 1
+
+
+def _configuracao_valida():
+    return bool(
+        TOKEN and TOKEN != "COLOQUE_SEU_TOKEN_AQUI"
+        and re.fullmatch(r"-?[1-9][0-9]*", CHAT_ID_AUTORIZADO)
+        and (not WEBHOOK_SECRET or re.fullmatch(r"[A-Za-z0-9_-]{1,256}", WEBHOOK_SECRET))
+    )
 
 
 def _baixar_estado_do_github():
@@ -54,33 +95,47 @@ def _baixar_estado_do_github():
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
         logger.info("GITHUB_TOKEN ausente — usando estado local (se houver).")
-        return
+        return True
 
     repo = "carlosdaniel3421www-max/B3-bot"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
 
+    sucesso = True
     for arquivo in ("posicoes.json", "propostas.json"):
         url = f"https://api.github.com/repos/{repo}/contents/{arquivo}"
+        temporario = None
         try:
-            resp = req.get(url, headers=headers, timeout=15)
+            resp = req.get(url, headers=headers, params={"ref": "main"}, timeout=(5, 15))
             if resp.status_code == 200:
                 import base64
                 conteudo = base64.b64decode(resp.json().get("content", "")).decode("utf-8")
-                # Só restaura se o conteúdo baixado for um JSON válido não-vazio.
-                # Evita sobrescrever o estado local com um arquivo vazio/corrompido
-                # se o GitHub ainda não tiver processado o commit mais recente.
-                import json as _json
-                dados = _json.loads(conteudo)
-                if dados is None:
-                    logger.warning("Ignorando %s: conteúdo vazio no GitHub", arquivo)
-                    continue
-                with open(arquivo, "w", encoding="utf-8") as f:
-                    f.write(conteudo)
+                dados = json.loads(conteudo)
+                if not isinstance(dados, dict) or not all(isinstance(v, dict) for v in dados.values()):
+                    raise ValueError("Estado deve ser um mapa de registros JSON")
+                # Mesmo diretorio para replace atomico; {} e um estado valido.
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=os.path.dirname(os.path.abspath(arquivo)),
+                    prefix=f".{arquivo}.", suffix=".tmp", delete=False,
+                ) as f:
+                    temporario = f.name
+                    json.dump(dados, f, ensure_ascii=False, allow_nan=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temporario, arquivo)
+                temporario = None
                 logger.info("Estado restaurado do GitHub: %s", arquivo)
             elif resp.status_code == 404:
                 logger.info("Arquivo %s ainda não existe no GitHub — estado local mantido", arquivo)
+            else:
+                sucesso = False
+                logger.warning("Falha ao restaurar %s: HTTP %s", arquivo, resp.status_code)
         except Exception as e:
-            logger.warning("Falha ao baixar %s do GitHub: %s", arquivo, e)
+            sucesso = False
+            logger.warning("Falha ao baixar %s do GitHub: %s", arquivo, type(e).__name__)
+        finally:
+            if temporario is not None:
+                os.unlink(temporario)
+    return sucesso
 
 
 def _sanitizar_html(texto: str) -> str:
@@ -108,94 +163,127 @@ def _sanitizar_html(texto: str) -> str:
 
 def _responder_telegram(chat_id, texto):
     """Envia resposta pro Telegram via API."""
-    import requests
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    try:
-        r = requests.post(url, data={
-            "chat_id": chat_id,
-            "text": _sanitizar_html(texto),
-            "parse_mode": "HTML",
-        })
-        if not r.ok:
-            logger.warning("Falha ao responder: %s", r.text)
-    except Exception as e:
-        logger.warning("Erro ao responder: %s", e)
+    return enviar_mensagem(TOKEN, chat_id, _sanitizar_html(texto))
+
+
+def _consumir_fila(fila):
+    """Unico consumidor; None encerra apos os itens anteriores (tambem em testes)."""
+    while True:
+        item = fila.get()
+        try:
+            if item is None:
+                return
+            update_id, chat_id, texto = item
+            with _comando_lock:
+                _processados[update_id] = "em_execucao"
+            try:
+                resposta = processar_comando(TOKEN, chat_id, texto)
+                resposta = resposta or "Nao entendi. Use /ajuda para ver os comandos."
+            except Exception as e:
+                logger.error("Erro no update %s: %s", update_id, type(e).__name__)
+                resposta = "Erro interno ao processar o comando. A analise nao sera repetida automaticamente."
+
+            enviado = False
+            for tentativa in range(_MAX_TENTATIVAS_ENVIO):
+                try:
+                    enviado = bool(_responder_telegram(chat_id, resposta))
+                except Exception as e:
+                    logger.warning("Falha no envio do update %s: %s", update_id, type(e).__name__)
+                if enviado:
+                    break
+                if tentativa + 1 < _MAX_TENTATIVAS_ENVIO:
+                    time.sleep(_INTERVALO_RETRY)
+            with _comando_lock:
+                _processados[update_id] = "enviado" if enviado else "falha_envio"
+            if not enviado:
+                logger.error("Envio do update %s esgotado; sem retry de negocio.", update_id)
+        finally:
+            fila.task_done()
 
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    """Recebe updates do Telegram em tempo real (webhook).
-    Responde 200 IMEDIATAMENTE para evitar que o Telegram re-entregue o
-    update (causando mensagens duplicadas quando a IA demora). O
-    processamento do comando roda em background.
-    """
+    """ACK apos enqueue atomico; duplicatas nao aguardam negocio/envio."""
+    global _worker
+    if not _configuracao_valida():
+        return jsonify({"ok": False}), 503
+    if WEBHOOK_SECRET and not hmac.compare_digest(
+        request.headers.get("X-Telegram-Bot-Api-Secret-Token", "").encode("utf-8"),
+        WEBHOOK_SECRET.encode("utf-8"),
+    ):
+        return jsonify({"ok": False}), 403
     try:
         update = request.get_json(force=True)
     except Exception:
         return jsonify({"ok": False}), 400
 
-    if not update:
+    if not isinstance(update, dict):
+        return jsonify({"ok": False}), 400
+
+    update_id = update.get("update_id")
+    if type(update_id) is not int or update_id < 0:
         return jsonify({"ok": False}), 400
 
     # Extrai mensagem do update
-    msg = update.get("message") or update.get("edited_message")
-    if not msg:
+    msg = update.get("message")
+    if msg is None:
         return jsonify({"ok": True})  # ignora outros tipos de update
-
-    update_id = update.get("update_id", 0)
-    chat_id = str(msg.get("chat", {}).get("id", ""))
+    if not isinstance(msg, dict) or not isinstance(msg.get("chat"), dict):
+        return jsonify({"ok": False}), 400
+    chat_id = str(msg["chat"].get("id", ""))
     texto = msg.get("text") or ""
+
+    if not isinstance(texto, str):
+        return jsonify({"ok": False}), 400
 
     if not texto or not chat_id:
         return jsonify({"ok": True})
 
     # Filtro de segurança: só responde pro dono do bot
-    if CHAT_ID_AUTORIZADO and chat_id != CHAT_ID_AUTORIZADO:
+    if chat_id != CHAT_ID_AUTORIZADO:
         logger.info("Ignorado comando de chat não autorizado: %s", chat_id)
         return jsonify({"ok": True})
 
-    # Deduplicação: evita reprocessar o mesmo update que o Telegram
-    # re-entregou por achar que o webhook não respondeu a tempo.
-    if update_id in _processados:
-        logger.info("Update %s já processado — ignorando re-entrega", update_id)
-        return jsonify({"ok": True})
-    _processados[update_id] = True
-    if len(_processados) > _MAX_RECENTES:
-        # Limpa os mais antigos para não vazar memória
-        antigos = sorted(_processados)[: -_MAX_RECENTES]
-        for k in antigos:
-            _processados.pop(k, None)
-
-    # Responde 200 AGORA (Telegram confirma recebimento) e processa depois
-    threading.Thread(
-        target=_processar_comando_em_thread,
-        args=(update_id, chat_id, texto),
-        daemon=True,
-    ).start()
-
-    return jsonify({"ok": True})
-
-
-def _processar_comando_em_thread(update_id: int, chat_id: str, texto: str):
-    """Processa o comando numa thread separada (não bloqueia o webhook)."""
-    try:
-        logger.info("Processando comando %s (update %s)", texto, update_id)
-        resposta = processar_comando(TOKEN, chat_id, texto)
-        if resposta:
-            _responder_telegram(chat_id, resposta)
-        else:
-            _responder_telegram(chat_id, "❓ Não entendi. Use /ajuda pra ver os comandos.")
-    except Exception as e:
-        logger.exception("Erro ao processar comando %s: %s", texto, e)
+    with _comando_lock:
+        if update_id in _processados:
+            return jsonify({"ok": True})
+        concluido = None
+        if len(_processados) >= _MAX_RECENTES:
+            concluido = next((k for k, v in _processados.items() if v in {"enviado", "falha_envio"}), None)
+            if concluido is None:
+                return jsonify({"ok": False}), 503
         try:
-            _responder_telegram(chat_id, "⚠️ Erro interno ao processar o comando.")
-        except Exception:
-            pass
+            if _worker is None or not _worker.is_alive():
+                _worker = threading.Thread(target=_consumir_fila, args=(_fila,), name="telegram-worker", daemon=True)
+                _worker.start()
+            _fila.put_nowait((update_id, chat_id, texto))
+        except (queue.Full, RuntimeError):
+            return jsonify({"ok": False}), 503
+        # O worker so pode mudar o estado depois de liberarmos esta trava.
+        _processados[update_id] = "pendente"
+        if concluido is not None:
+            del _processados[concluido]
+    return jsonify({"ok": True})
 
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "webhook": bool(WEBHOOK_URL)})
+    return jsonify({"status": "ok"})
+
+
+@app.route("/ready", methods=["GET"])
+def ready():
+    import requests
+
+    pronto = False
+    if _estado_pronto and _configuracao_valida() and WEBHOOK_URL:
+        try:
+            r = requests.get(f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo", timeout=(5, 15))
+            data = r.json()
+            pronto = bool(r.ok and data.get("ok") and data.get("result", {}).get("url") == WEBHOOK_URL)
+        except (requests.RequestException, ValueError, AttributeError):
+            pass
+    return jsonify({"status": "ok" if pronto else "unavailable", "webhook": pronto}), 200 if pronto else 503
 
 
 @app.route("/", methods=["GET"])
@@ -204,6 +292,7 @@ def index():
         "robô": "B3-bot servidor (webhook Telegram)",
         "webhook": WEBHOOK_URL or "não configurado",
         "health": "/health",
+        "ready": "/ready",
     })
 
 
@@ -212,49 +301,62 @@ def _configurar_webhook():
     global WEBHOOK_URL
     import requests
 
+    WEBHOOK_URL = ""
+    if not _configuracao_valida():
+        logger.error("Configure TELEGRAM_TOKEN, TELEGRAM_CHAT_ID e um segredo valido (se definido).")
+        return False
+    if not WEBHOOK_SECRET:
+        logger.warning("Modo legado: sem TELEGRAM_WEBHOOK_SECRET, origem do webhook nao autenticada.")
+
     # Detecta a URL pública (Render, Replit, ou manual)
     dominio = (
-        os.environ.get("RENDER_EXTERNAL_URL")       # Render
+        os.environ.get("WEBHOOK_URL")             # manual
+        or os.environ.get("RENDER_EXTERNAL_URL")   # Render
         or os.environ.get("REPLIT_DEV_DOMAIN")       # Replit
-        or os.environ.get("WEBHOOK_URL")             # manual (configurar no secret)
     )
     if dominio:
-        # Remove barra no final se tiver
-        dominio = dominio.rstrip("/")
-        if "/webhook" not in dominio:
-            WEBHOOK_URL = f"{dominio}/webhook"
-        else:
-            WEBHOOK_URL = dominio
-        logger.info("URL detectada: %s", WEBHOOK_URL)
+        dominio = dominio.strip().rstrip("/")
+        if "://" not in dominio:
+            dominio = f"https://{dominio}"
+        try:
+            partes = urlsplit(dominio)
+            partes.port  # valida portas malformadas antes de chamar requests
+        except ValueError:
+            logger.error("URL publica malformada.")
+            return False
+        if partes.scheme != "https" or not partes.hostname or partes.username or partes.password or partes.query or partes.fragment:
+            logger.error("URL publica invalida: use HTTPS sem credenciais, query ou fragmento.")
+            return False
+        destino = dominio if partes.path.endswith("/webhook") else f"{dominio}/webhook"
     else:
         logger.warning("URL do servidor não detectada. Configure manualmente.")
-        logger.info("Após rodar, execute este comando no terminal (substitua SUA_URL):")
-        logger.info("  curl -X POST https://api.telegram.org/bot%s/setWebhook?url=SUA_URL/webhook", TOKEN)
         return False
 
-    # Remove webhook antigo e registra o novo
-    import requests
-    url = f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={WEBHOOK_URL}"
+    # Nao descarta updates pendentes. Lista explicita desfaz configuracao antiga.
+    payload = {"url": destino, "allowed_updates": ["message"], "max_connections": 1,
+               "secret_token": WEBHOOK_SECRET}
     try:
-        r = requests.get(url)
+        r = requests.post(f"https://api.telegram.org/bot{TOKEN}/setWebhook", json=payload, timeout=(5, 15))
         data = r.json()
-        if data.get("ok"):
+        if r.ok and data.get("ok"):
+            WEBHOOK_URL = destino
             logger.info("Webhook registrado: %s", WEBHOOK_URL)
             return True
         else:
-            logger.warning("Falha ao registrar webhook: %s", data)
+            logger.warning("Falha ao registrar webhook: HTTP %s", r.status_code)
             return False
     except Exception as e:
-        logger.warning("Erro ao registrar webhook: %s", e)
+        logger.warning("Erro ao registrar webhook: %s", type(e).__name__)
         return False
 
 
 if __name__ == "__main__":
     logger.info("Iniciando servidor B3-bot...")
     # Restaura posições/propostas do GitHub antes de atender comandos
-    _baixar_estado_do_github()
-    _configurar_webhook()
+    _estado_pronto = _baixar_estado_do_github()
+    if not _estado_pronto or not _configurar_webhook():
+        raise SystemExit("Startup incompleto: restauracao/configuracao falhou.")
 
     porta = int(os.environ.get("PORT", "8080"))
     logger.info("Servidor rodando na porta %s", porta)
-    app.run(host="0.0.0.0", port=porta)
+    app.run(host="0.0.0.0", port=porta, threaded=True)

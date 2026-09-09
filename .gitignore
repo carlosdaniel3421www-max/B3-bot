@@ -3,9 +3,16 @@ __pycache__/
 *_analise.png
 graficos_tmp/
 cache/
+.pytest_cache/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+.*.json.*.tmp
 
-# Arquivos de estado/posições — sincronizados via GitHub API (posicoes.py),
-# não devem ir por commit manual para evitar conflito com a versão do servidor
+# Evita adicionar snapshots locais novos por acidente. Arquivos ja rastreados
+# continuam versionados; .gitignore nao impede commits nem protege concorrencia.
 posicoes.json
 propostas.json
 telegram_offset.json

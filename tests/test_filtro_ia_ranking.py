@@ -61,15 +61,17 @@ def test_ia_sem_candidatos():
     assert "Nenhum ativo" in msg
 
 
-def test_trava_ia_analisa_apenas_score_8_mais():
+def test_trava_ia_analisa_apenas_score_8_mais(monkeypatch):
     import relatorio_diario as rd
+    monkeypatch.setattr(rd.config, "EXIGIR_SETUP", False)
     resultados = [
         _fake_resultado("CMIG4", 8, "venda"),
         _fake_resultado("PETR4", 7, "compra"),
     ]
     chamados = []
 
-    def fake_montar_trava(preco, direcao, cadeia_real=None, ticker=None):
+    def fake_montar_trava(preco, direcao, cadeia_real=None, ticker=None, permitir_estimativa=True):
+        assert permitir_estimativa is False
         chamados.append(ticker)
         return {}
     fake_formatar = lambda t, p: "ok"

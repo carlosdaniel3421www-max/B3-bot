@@ -18,10 +18,14 @@ IMPORTANTE:
 """
 
 import logging
+import math
+from datetime import date
 import time
 import threading
 
 import requests
+
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -170,28 +174,37 @@ def buscar_cadeia_estruturada(ticker: str, usar_cache: bool = True) -> dict | No
     col_volume = 10
     col_vol_impl = 17
     col_delta = 18
-    col_bid = 7   # variação — usado como proxy? Não; bid/ask não vêm no último pregão
-    col_ask = 8
+    # Se o servidor fornecer o schema, nao interpretar outra coluna como preco.
+    columns = raw.get("columns") or []
+    indices = {c.get("id"): i for i, c in enumerate(columns) if isinstance(c, dict)}
+    campos = {"strike": col_strike, "preco": col_preco, "negocios": col_negocios,
+              "volume": col_volume, "vol_impl": col_vol_impl, "delta": col_delta,
+              "sufixo": 0, "modelo": 2, "data_hora": 8}
+    if columns:
+        if not all(c in indices for c in ("strike", "preco", "negocios")):
+            logger.warning("Schema de opcoes desconhecido; cotacoes indisponiveis")
+            return None
+        campos = {c: indices.get(c) for c in campos}
 
     def _mapa(series: list) -> dict:
         m = {}
+        duplicados = set()
         for s in series:
-            if len(s) <= col_strike:
+            if not isinstance(s, (list, tuple)):
                 continue
-            try:
-                strike = float(s[col_strike])
-            except (TypeError, ValueError):
+            valores = {c: s[i] if i is not None and i < len(s) else None
+                       for c, i in campos.items()}
+            strike = _to_float(valores["strike"])
+            if strike is None or strike <= 0 or strike in duplicados:
                 continue
-            m[strike] = {
-                "strike": strike,
-                "preco": _to_float(s[col_preco]),
-                "negocios": _to_float(s[col_negocios]),
-                "volume": _to_float(s[col_volume]),
-                "vol_impl": _to_float(s[col_vol_impl]) if len(s) > col_vol_impl else None,
-                "delta": _to_float(s[col_delta]) if len(s) > col_delta else None,
-                "sufixo": s[0] if s and s[0] else "",
-                "modelo": s[2] if len(s) > 2 else "",
-            }
+            if strike in m:
+                # Strike/vencimento nao distinguem series com modelos diferentes.
+                del m[strike]
+                duplicados.add(strike)
+                continue
+            m[strike] = {c: _to_float(v) if c in (
+                "strike", "preco", "negocios", "volume", "vol_impl", "delta") else v
+                for c, v in valores.items()}
         return m
 
     expirations = []
@@ -206,7 +219,7 @@ def buscar_cadeia_estruturada(ticker: str, usar_cache: bool = True) -> dict | No
 
     return {
         "ticker": ticker,
-        "preco_base": raw.get("preco_base"),
+        "preco_base": _to_float(raw.get("preco_base")),
         "expirations": expirations,
         "data_ultimo_pregao": raw.get("data_ultimo_pregao"),
     }
@@ -214,7 +227,7 @@ def buscar_cadeia_estruturada(ticker: str, usar_cache: bool = True) -> dict | No
 
 def vol_impl_mediana(cadeia: dict, tipo: str = None, limite_negocios: int = 1) -> float | None:
     """
-    Calcula a mediana da volatilidade implícita (em decimal, ex: 0.28 = 28%)
+    Calcula a mediana da volatilidade implícita em percentual (28 = 28%).
     das opções líquidas na cadeia. Retorna None se não houver dados.
     `tipo`: "call", "put" ou None (ambos).
     """
@@ -229,8 +242,8 @@ def vol_impl_mediana(cadeia: dict, tipo: str = None, limite_negocios: int = 1) -
             lados.append(venc.get("puts", {}))
         for lado in lados:
             for info in lado.values():
-                vi = info.get("vol_impl")
-                neg = info.get("negocios")
+                vi = _to_float(info.get("vol_impl"))
+                neg = _to_float(info.get("negocios"))
                 if vi is not None and vi > 0 and (neg or 0) >= limite_negocios:
                     vols.append(vi)
     if not vols:
@@ -244,50 +257,118 @@ def vol_impl_mediana(cadeia: dict, tipo: str = None, limite_negocios: int = 1) -
 
 
 def _to_float(v):
-    if v is None:
+    if v is None or isinstance(v, bool):
         return None
     try:
-        return float(v)
+        numero = float(v)
+        return numero if math.isfinite(numero) else None
     except (TypeError, ValueError):
         return None
 
 
-def buscar_melhor_vencimento(cadeia: dict, dias_min: int = 15, dias_max: int = 60,
-                             preferir_mensal: bool = True) -> dict | None:
+def _faixa_dias_corridos(dias_corridos_min=None, dias_corridos_max=None):
+    """Resolve limites opcionais; personalizacao so pode estreitar a politica."""
+    minimo = config.OPCOES_MIN_DIAS_CORRIDOS if dias_corridos_min is None else dias_corridos_min
+    maximo = config.OPCOES_MAX_DIAS_CORRIDOS if dias_corridos_max is None else dias_corridos_max
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+               and math.isfinite(v) and v > 0 for v in (minimo, maximo)):
+        raise ValueError("Faixa de dias corridos invalida")
+    minimo = max(minimo, config.OPCOES_MIN_DIAS_CORRIDOS)
+    maximo = min(maximo, config.OPCOES_MAX_DIAS_CORRIDOS, 30)
+    if minimo > maximo:
+        raise ValueError("Faixa de dias corridos fora da politica de novas entradas")
+    return minimo, maximo
+
+
+def buscar_melhor_vencimento(cadeia: dict, dias_min: int = 1, dias_max: int = 60,
+                             preferir_mensal: bool = True, *,
+                             dias_corridos_min=None, dias_corridos_max=None) -> dict | None:
     """
     Escolhe o melhor vencimento da cadeia: o mensal (se preferir_mensal)
-    com 'du' (dias úteis) dentro da faixa, ou o que tiver mais negócios.
+    com dt dentro da politica de dias corridos (14..30 por padrao).
+    dias_min/dias_max sao filtros adicionais em DU, nao substituem a data.
+    Limites corridos opcionais apenas estreitam a politica. Prioriza o meio
+    da faixa corrida entre os vencimentos elegiveis, sem alterar a cadeia.
     Retorna o dict do vencimento ou None.
     """
     if not cadeia or not cadeia.get("expirations"):
         return None
+    try:
+        minimo, maximo = _faixa_dias_corridos(dias_corridos_min, dias_corridos_max)
+    except ValueError:
+        return None
 
-    candidatos = [e for e in cadeia["expirations"] if dias_min <= e["du"] <= dias_max]
+    candidatos = []
+    hoje = date.today()
+    for e in cadeia["expirations"]:
+        du = _to_float(e.get("du"))
+        try:
+            dias_corridos = (date.fromisoformat(e.get("dt")) - hoje).days
+        except (TypeError, ValueError):
+            continue
+        if minimo <= dias_corridos <= maximo and du is not None and dias_min <= du <= dias_max:
+            candidatos.append(e)
     if not candidatos:
-        candidatos = list(cadeia["expirations"])
+        return None
 
     if preferir_mensal:
-        mensais = [e for e in candidatos if e["mensal"]]
+        mensais = [e for e in candidatos if e.get("mensal")]
         if mensais:
             candidatos = mensais
 
-    # Ordena por 'du' mais próximo do meio da faixa (30-45 dias)
-    candidatos.sort(key=lambda e: abs(e["du"] - 35))
+    candidatos.sort(key=lambda e: abs(
+        (date.fromisoformat(e["dt"]) - hoje).days - (minimo + maximo) / 2))
     return candidatos[0]
 
 
+def cotacao_utilizavel(info: dict, cadeia: dict) -> bool:
+    """Rejeita falta de negocio e timestamps comprovadamente inconsistentes.
+
+    Sem timestamp nao e possivel atestar atualidade; nao equivale a bid/ask.
+    """
+    preco = _to_float(info.get("preco"))
+    if preco is None or preco < 0:
+        return False
+    if "negocios" in info and (_to_float(info["negocios"]) or 0) <= 0:
+        return False
+    referencia_raw = cadeia.get("data_ultimo_pregao")
+    if referencia_raw is not None:
+        try:
+            referencia = date.fromisoformat(str(referencia_raw)[:10])
+        except ValueError:
+            return False
+        # Teto conservador sem calendario de feriados; nao certifica ultimo pregao.
+        if not 0 <= (date.today() - referencia).days <= 7:
+            return False
+    timestamp = info.get("data_hora")
+    if timestamp is not None:
+        try:
+            dia = date.fromisoformat(str(timestamp)[:10])
+            referencia = date.fromisoformat(str(cadeia.get("data_ultimo_pregao"))[:10])
+        except ValueError:
+            return False
+        if dia != referencia or dia > date.today():
+            return False
+    return True
+
+
 def buscar_premio_real(ticker: str, strike_alvo: float, tipo: str,
-                       dias_min: int = 15, dias_max: int = 60) -> dict | None:
+                       dias_min: int = 1, dias_max: int = 60, *,
+                       dias_corridos_min=None, dias_corridos_max=None) -> dict | None:
     """
     Busca o prêmio real da opção mais próxima do strike_alvo, no melhor
-    vencimento disponível.
+    vencimento elegivel pela politica corrida; dias_min/dias_max filtram DU.
     Retorna dict com premio, strike_real, vencimento, negocios ou None.
     """
+    if tipo.lower() not in ("call", "put") or _to_float(strike_alvo) is None or strike_alvo <= 0:
+        raise ValueError("Tipo ou strike invalido")
     cadeia = buscar_cadeia_estruturada(ticker)
     if not cadeia:
         return None
 
-    venc = buscar_melhor_vencimento(cadeia, dias_min, dias_max)
+    venc = buscar_melhor_vencimento(
+        cadeia, dias_min, dias_max, dias_corridos_min=dias_corridos_min,
+        dias_corridos_max=dias_corridos_max)
     if not venc:
         return None
 
@@ -297,12 +378,16 @@ def buscar_premio_real(ticker: str, strike_alvo: float, tipo: str,
 
     # Acha o strike mais próximo do alvo
     melhor = None
+    melhor_strike = None
     melhor_dist = float("inf")
     for strike, info in lado.items():
+        if not cotacao_utilizavel(info, cadeia):
+            continue
         dist = abs(strike - strike_alvo)
         if dist < melhor_dist:
             melhor_dist = dist
             melhor = info
+            melhor_strike = strike
 
     if melhor is None:
         return None
@@ -314,9 +399,10 @@ def buscar_premio_real(ticker: str, strike_alvo: float, tipo: str,
 
     return {
         "premio": premio,
-        "strike_real": melhor["strike"],
+        "strike_real": melhor_strike,
         "vencimento": venc["dt"],
         "dias_uteis": venc["du"],
+        "dias_corridos": (date.fromisoformat(venc["dt"]) - date.today()).days,
         "negocios": melhor.get("negocios"),
         "volume": melhor.get("volume"),
         "sufixo": melhor.get("sufixo"),

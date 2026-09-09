@@ -7,18 +7,30 @@ name: Bot Telegram (comandos)
 
 on:
   workflow_dispatch:
+    inputs:
+      servidor_parado:
+        description: "Confirma que o servidor foi parado e o webhook removido manualmente?"
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
   processar-comandos:
+    if: ${{ inputs.servidor_parado }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: relatorio-estado-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - name: Baixar o código do repositório
+        id: checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          ref: ${{ github.ref_name }}
 
       - name: Configurar Python
         uses: actions/setup-python@v5
@@ -28,18 +40,70 @@ jobs:
       - name: Instalar dependências
         run: pip install -r requirements.txt
 
-      - name: Processar comandos do Telegram
+      - name: Bloquear polling se webhook estiver ativo
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os, re, requests
+          token = os.environ.get("TELEGRAM_TOKEN", "")
+          chat = os.environ.get("TELEGRAM_CHAT_ID", "")
+          if not token or not re.fullmatch(r"-?[1-9][0-9]*", chat):
+              raise SystemExit("Configure token e chat autorizado antes do polling.")
+          try:
+              r = requests.get(f"https://api.telegram.org/bot{token}/getWebhookInfo", timeout=(5, 15))
+              data = r.json()
+              seguro = r.ok and data.get("ok") is True and data.get("result", {}).get("url") == ""
+          except Exception:
+              seguro = False
+          if not seguro:
+              raise SystemExit("Polling bloqueado: webhook ativo ou verificacao indisponivel.")
+          PY
+
+      - name: Processar comandos do Telegram
+        id: comandos
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Uma unica persistencia no commit abaixo. /relatorio via API fica
+          # indisponivel neste fallback; use o workflow de relatorio manual.
+          GITHUB_TOKEN: ""
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CARLOS: ${{ secrets.CARLOS }}
         run: python telegram_bot.py
 
       - name: Salvar mudanças (posicoes.json, propostas.json, offset)
+        if: ${{ always() && steps.comandos.outcome != 'skipped' && steps.checkout.outcome == 'success' }}
+        shell: bash
+        env:
+          BRANCH: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
           git config user.name "robo-b3-bot"
           git config user.email "actions@github.com"
-          git add posicoes.json propostas.json telegram_offset.json
-          git diff --staged --quiet || git commit -m "Atualiza posicoes/propostas [skip ci]"
-          git pull --rebase --autostash origin main
-          git push
+          for arquivo in posicoes.json propostas.json telegram_offset.json; do
+            if [[ -f "$arquivo" ]]; then
+              # Allowlist explicita: sao ignorados para commits manuais.
+              git add -f -- "$arquivo"
+            fi
+          done
+          if git diff --staged --quiet; then
+            exit 0
+          fi
+          git commit -m "Atualiza posicoes/propostas [skip ci]"
+          if ! git push origin "HEAD:refs/heads/$BRANCH"; then
+            echo "::error::Persistencia concorrente: reconciliar o artifact, sem force/rebase."
+            exit 1
+          fi
+
+      - name: Preservar dados em caso de falha
+        if: ${{ failure() && steps.comandos.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dados-telegram-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            posicoes.json
+            propostas.json
+            telegram_offset.json
+          if-no-files-found: ignore

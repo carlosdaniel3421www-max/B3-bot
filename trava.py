@@ -21,6 +21,8 @@ IMPORTANTE: sem OpLab conectada, o prêmio é ESTIMATIVA teórica
 
 import logging
 import math
+from datetime import date
+from decimal import Decimal
 
 from math import erf, sqrt
 
@@ -40,8 +42,17 @@ def _premio_bs_europeu(S, K, T, r, sigma, tipo):
     r: taxa livre de risco | sigma: volatilidade anualizada
     tipo: 'call' ou 'put'
     """
-    if S <= 0 or K <= 0 or T <= 0 or sigma <= 0:
+    if tipo not in ("call", "put") or not all(math.isfinite(v) for v in (S, K, T, r, sigma)):
+        raise ValueError("Parametros Black-Scholes invalidos")
+    if S <= 0 or K <= 0:
         return 0.0
+    if T <= 0:
+        return max(S - K if tipo == "call" else K - S, 0.0)
+    if sigma < 0:
+        raise ValueError("Volatilidade negativa")
+    if sigma == 0:
+        strike_descontado = K * math.exp(-r * T)
+        return max(S - strike_descontado if tipo == "call" else strike_descontado - S, 0.0)
     d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
     d2 = d1 - sigma * math.sqrt(T)
 
@@ -57,17 +68,17 @@ def _premio_bs_europeu(S, K, T, r, sigma, tipo):
 def estimar_premio(preco_atual: float, strike: float, dias_venc: int,
                    tipo: str, sigma: float = 0.30, taxa_juros: float = 0.105) -> float:
     """
-    Estima o prêmio de uma opção via Black-Scholes.
+    Estima o prêmio via Black-Scholes; dias_venc em dias uteis (base 252).
     sigma default 0.30 (volatilidade anual histórica típica de ações B3),
     taxa default 10.5% a.a. (Selic aproximada).
     """
-    T = dias_venc / 365.0
+    T = dias_venc / 252.0
     premio = _premio_bs_europeu(preco_atual, strike, T, taxa_juros, sigma, tipo.lower())
     return round(premio, 2)
 
 
 def _arredondar_strike(valor):
-    """Ajusta strike para a grade real da B3 (0.50 até R$10, 1.00 acima)."""
+    """Grade aproximada para simulacao; nao comprova existencia de serie na B3."""
     if valor <= 10:
         return round(valor * 2) / 2.0
     return round(valor)
@@ -106,6 +117,8 @@ def _encontrar_strike_por_premio(preco_atual, dias_venc, tipo, premio_alvo,
         melhor = None
         melhor_dist = float("inf")
         strike = _arredondar_strike(preco_atual)
+        if strike <= preco_atual:
+            strike = _proximo_strike(strike, "cima")
         for _ in range(max_passos):
             premio = estimar_premio(preco_atual, strike, dias_venc, "call", sigma)
             dist = abs(premio - premio_alvo)
@@ -121,7 +134,11 @@ def _encontrar_strike_por_premio(preco_atual, dias_venc, tipo, premio_alvo,
         melhor = None
         melhor_dist = float("inf")
         strike = _arredondar_strike(preco_atual)
+        if strike >= preco_atual:
+            strike = _proximo_strike(strike, "baixo")
         for _ in range(max_passos):
+            if strike <= 0:
+                break
             premio = estimar_premio(preco_atual, strike, dias_venc, "put", sigma)
             dist = abs(premio - premio_alvo)
             if dist < melhor_dist:
@@ -138,19 +155,32 @@ def montar_trava(preco_atual: float, direcao: str,
                  contratos: int = CONTRATOS_PADRAO,
                  gasto_maximo: float = GASTO_MAXIMO_PADRAO,
                  dias_venc: int = 35, sigma: float = 0.30,
-                 cadeia_real: dict = None, ticker: str = None) -> dict:
+                 cadeia_real: dict = None, ticker: str = None,
+                 permitir_estimativa: bool = True) -> dict:
     """
     Monta uma trava baseada em PRÊMIO-ALVO.
     Se `cadeia_real` for fornecido, busca os strikes e prêmios na cadeia
     real do opcoes.net.br em vez de usar Black-Scholes.
     `ticker` é necessário para buscar dados reais na cadeia.
+    Dados reais exigem dt na politica de 14..30 dias corridos.
+    permitir_estimativa=False exige as duas pernas reais ou levanta ValueError.
+    True permite simulacao BS; dias_venc e DU e pode ser arbitrario nessa
+    simulacao, que nao constitui recomendacao real de nova entrada.
     """
     direcao = direcao.lower()
     if direcao not in ("compra", "venda"):
         raise ValueError("direcao deve ser 'compra' ou 'venda'")
 
-    premio_alvo_perna1 = premio_alvo_perna1 or PREMI0_ALVO_PERNA1
-    premio_alvo_perna2 = premio_alvo_perna2 or PREMI0_ALVO_PERNA2
+    premio_alvo_perna1 = PREMI0_ALVO_PERNA1 if premio_alvo_perna1 is None else premio_alvo_perna1
+    premio_alvo_perna2 = PREMI0_ALVO_PERNA2 if premio_alvo_perna2 is None else premio_alvo_perna2
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0 for v in (
+            preco_atual, premio_alvo_perna1, premio_alvo_perna2,
+            contratos, gasto_maximo, dias_venc, sigma)):
+        raise ValueError("Parâmetros da trava devem ser finitos e positivos")
+    if int(contratos) != contratos:
+        raise ValueError("Contratos devem ser inteiros")
+    if not isinstance(permitir_estimativa, bool):
+        raise ValueError("permitir_estimativa deve ser booleano")
 
     if direcao == "compra":
         tipo = "call"
@@ -165,6 +195,7 @@ def montar_trava(preco_atual: float, direcao: str,
     premio_vendido = None
     strike_vendido = None
     vencimento_data = None
+    dias_corridos = None
     sufixo_comprado = None
     sufixo_vendido = None
     vol_impl_comprado = None
@@ -180,36 +211,39 @@ def montar_trava(preco_atual: float, direcao: str,
     fonte = "estimativa"
     sigma_real = sigma
     if cadeia_real and ticker:
-        from fonte_opcoes import buscar_melhor_vencimento, buscar_premio_real, vol_impl_mediana
-        # Usa a volatilidade implícita mediana real da cadeia (melhor que 30% fixo)
-        vi_mediana = vol_impl_mediana(cadeia_real, tipo=tipo)
-        if vi_mediana and vi_mediana > 0:
-            sigma_real = vi_mediana / 100.0  # API retorna percentual (ex: 35.2 = 35.2%)
+        from fonte_opcoes import buscar_melhor_vencimento, cotacao_utilizavel, vol_impl_mediana
         venc = buscar_melhor_vencimento(cadeia_real)
         if venc:
-            dias_venc = venc["du"]
+            dias_venc = float(venc["du"])
             vencimento_data = venc["dt"]
+            dias_corridos = (date.fromisoformat(vencimento_data) - date.today()).days
             lado = venc.get("calls" if tipo == "call" else "puts", {})
+            lado_valido = {s: i for s, i in lado.items() if cotacao_utilizavel(i, cadeia_real)}
+            vi_mediana = vol_impl_mediana({"expirations": [{
+                "calls" if tipo == "call" else "puts": lado_valido}]}, tipo=tipo)
+            if vi_mediana:
+                sigma_real = vi_mediana / 100.0
             if lado:
                 # Acha strike com prêmio mais próximo do alvo, exigindo
                 # LIQUIDEZ: preço disponível E pelo menos 1 negócio (evita
                 # pegar opção sem negócio recente com preço desatualizado).
                 def _tem_liquidez(info):
-                    return (info["preco"] is not None
-                            and info.get("negocios") is not None
-                            and info["negocios"] > 0)
+                    return cotacao_utilizavel(info, cadeia_real) and (info.get("negocios") or 0) > 0
 
                 melhor_strike = None
                 melhor_dist = float("inf")
                 for strike, info in lado.items():
                     if not _tem_liquidez(info):
                         continue
+                    if (direcao == "compra" and strike <= preco_atual
+                            or direcao == "venda" and strike >= preco_atual):
+                        continue
                     dist = abs(info["preco"] - premio_alvo_perna1)
                     if dist < melhor_dist:
                         melhor_dist = dist
                         melhor_strike = strike
                 if melhor_strike:
-                    premio_comprado = round(lado[melhor_strike]["preco"], 2)
+                    premio_comprado = lado[melhor_strike]["preco"]
                     strike_comprado = melhor_strike
                     sufixo_comprado = lado[melhor_strike].get("sufixo") or ""
                     vol_impl_comprado = lado[melhor_strike].get("vol_impl")
@@ -233,32 +267,28 @@ def montar_trava(preco_atual: float, direcao: str,
                             melhor_dist2 = dist
                             strike_vendido = strike
                     if strike_vendido:
-                        premio_vendido = round(lado[strike_vendido]["preco"], 2)
+                        premio_vendido = lado[strike_vendido]["preco"]
                         sufixo_vendido = lado[strike_vendido].get("sufixo") or ""
                         vol_impl_vendido = lado[strike_vendido].get("vol_impl")
                         delta_vendido = lado[strike_vendido].get("delta")
                         negocios_vendido = lado[strike_vendido].get("negocios")
                         volume_vendido = lado[strike_vendido].get("volume")
-                    else:
-                        # Fallback: strike mais distante com liquidez
-                        strikes_ordenados = sorted(
-                            [s for s, i in lado.items() if _tem_liquidez(i)]
-                        )
-                        if strikes_ordenados:
-                            strike_vendido = strikes_ordenados[-1] if direcao == "compra" else strikes_ordenados[0]
-                            premio_vendido = round(lado[strike_vendido]["preco"], 2)
-                            sufixo_vendido = lado[strike_vendido].get("sufixo") or ""
-                            negocios_vendido = lado[strike_vendido].get("negocios")
-                            volume_vendido = lado[strike_vendido].get("volume")
-                        else:
-                            strike_vendido = None
                 else:
                     strike_comprado = None
                     premio_comprado = None
 
     # Se não conseguiu com dados reais (falta perna comprada OU vendida), usa Black-Scholes
-    if not premio_comprado or not premio_vendido or fonte == "estimativa":
+    if premio_comprado is None or premio_vendido is None or fonte == "estimativa":
+        if not permitir_estimativa:
+            raise ValueError("Nenhum par real completo na politica de dias corridos; estimativa desabilitada")
         fonte = "estimativa"
+        vencimento_data = None
+        dias_corridos = None
+        sufixo_comprado = sufixo_vendido = None
+        vol_impl_comprado = vol_impl_vendido = None
+        delta_comprado = delta_vendido = None
+        negocios_comprado = negocios_vendido = None
+        volume_comprado = volume_vendido = None
         strike_comprado = _encontrar_strike_por_premio(
             preco_atual, dias_venc, tipo, premio_alvo_perna1, sigma_real)
         premio_comprado = estimar_premio(preco_atual, strike_comprado, dias_venc, tipo, sigma_real)
@@ -277,40 +307,48 @@ def montar_trava(preco_atual: float, direcao: str,
                 strike_vendido = _proximo_strike(strike_comprado, "baixo")
                 premio_vendido = estimar_premio(preco_atual, strike_vendido, dias_venc, tipo, sigma_real)
 
-    premio_vendido = max(premio_vendido or 0.0, 0.0)
-    custo_liquido = round(premio_comprado - premio_vendido, 2)
-    if custo_liquido < 0.05:
-        custo_liquido = round(premio_comprado, 2)
+    if not all(math.isfinite(v) and v >= 0 for v in (
+            premio_comprado, premio_vendido, strike_comprado, strike_vendido)):
+        raise ValueError("Prêmios e strikes devem ser finitos e não negativos")
+    if min(strike_comprado, strike_vendido) <= 0:
+        raise ValueError("Strikes devem ser positivos")
+    strike_comprado, strike_vendido, premio_comprado, premio_vendido = (
+        Decimal(str(v)) for v in (strike_comprado, strike_vendido, premio_comprado, premio_vendido))
+    contratos = int(contratos)
+    custo_liquido = premio_comprado - premio_vendido
+    largura = (strike_vendido - strike_comprado) if direcao == "compra" else (strike_comprado - strike_vendido)
+    if not 0 < custo_liquido < largura:
+        raise ValueError("Custo líquido deve ser positivo e menor que a largura da trava")
 
     # Custo total pelo número de contratos
-    custo_total = round(custo_liquido * contratos, 2)
-    premio_comprado_total = round(premio_comprado * contratos, 2)
+    custo_total = custo_liquido * contratos
+    premio_comprado_total = premio_comprado * contratos
 
     # Risco máximo = o que você paga. Ganho máximo = largura do spread - custo.
     if direcao == "compra":
         risco_max = custo_total
-        ganho_max = round((strike_vendido - strike_comprado - custo_liquido) * contratos, 2)
-        breakeven = round(strike_comprado + custo_liquido, 2)
+        ganho_max = (largura - custo_liquido) * contratos
+        breakeven = strike_comprado + custo_liquido
         encerrar_quando = strike_comprado
     else:
         risco_max = custo_total
-        ganho_max = round((strike_comprado - strike_vendido - custo_liquido) * contratos, 2)
-        breakeven = round(strike_comprado - custo_liquido, 2)
+        ganho_max = (largura - custo_liquido) * contratos
+        breakeven = strike_comprado - custo_liquido
         encerrar_quando = strike_comprado
 
-    dentro_orcamento = custo_total <= gasto_maximo
+    dentro_orcamento = custo_total <= Decimal(str(gasto_maximo))
 
     # --- Plano de saída ---
     # Stop no prêmio: se a trava perder 50% do valor, sai (perda máxima recomendada)
-    stop_premio_por_contrato = round(custo_liquido * 0.5, 2)
-    stop_premio_total = round(stop_premio_por_contrato * contratos, 2)
+    stop_premio_por_contrato = custo_liquido / 2
+    stop_premio_total = stop_premio_por_contrato * contratos
     # Alvo: quando o ativo chegar perto do strike comprado, a trava valoriza forte
     # Lucro sugerido = 50% do ganho máximo (fechamento parcial conservador)
-    lucro_alvo_total = round(ganho_max * 0.5, 2)
+    lucro_alvo_total = ganho_max / 2
     # Tempo máximo: sair até 15 dias úteis antes do vencimento (theta acelera)
-    dias_max_holding = max(dias_venc - 15, 5)
+    dias_max_holding = max(dias_venc - 15, 0)
 
-    return {
+    resultado = {
         "nome": nome,
         "direcao": direcao,
         "tipo": tipo,
@@ -329,6 +367,7 @@ def montar_trava(preco_atual: float, direcao: str,
         "gasto_maximo": gasto_maximo,
         "dentro_orcamento": dentro_orcamento,
         "dias_vencimento": dias_venc,
+        "dias_corridos": dias_corridos,
         "vencimento_data": vencimento_data,
         "sufixo_comprado": sufixo_comprado,
         "sufixo_vendido": sufixo_vendido,
@@ -349,11 +388,13 @@ def montar_trava(preco_atual: float, direcao: str,
             "Prêmios reais do último pregão (opcoes.net.br). Confirme a "
             "liquidez (volume/negócios) antes de operar."
             if fonte == "real" else
-            "Prêmios estimados por Black-Scholes (volatilidade histórica) — "
+            "Prêmios estimados por Black-Scholes (volatilidade assumida ou implicita) — "
             "NÃO é cotação real. Confirme os prêmios e a liquidez das duas "
             "pernas no seu home broker ou OpLab antes de operar."
         ),
     }
+    return {campo: float(valor) if isinstance(valor, Decimal) else valor
+            for campo, valor in resultado.items()}
 
 
 def formatar_trava(trava: dict, preco_atual: float) -> str:
@@ -374,6 +415,8 @@ def formatar_trava(trava: dict, preco_atual: float) -> str:
     # Data de vencimento: real (vencimento_data) ou estimativa (dias úteis)
     if trava.get("vencimento_data"):
         venc_txt = f"Vencimento: {trava['vencimento_data']} ({trava['dias_vencimento']} dias úteis)"
+        if trava.get("dias_corridos") is not None:
+            venc_txt += f"; {trava['dias_corridos']} dias corridos"
     else:
         venc_txt = f"Vencimento: ~{trava['dias_vencimento']} dias úteis (estimativa)"
 
@@ -406,7 +449,7 @@ def formatar_trava(trava: dict, preco_atual: float) -> str:
         linhas.append(f"  🎯 <b>Quando o ativo chegar perto de R$ {encerrar:.2f}</b> — a opção OTM valoriza forte, encerre")
     dias = trava.get("dias_max_holding")
     venc = trava.get("vencimento_data")
-    if dias:
+    if dias is not None:
         info_venc = f" (venc. {venc})" if venc else ""
         linhas.append(f"  ⏳ <b>Prazo máx:</b> segure até ~{dias} dias úteis{info_venc} — depois o tempo come a trava (theta)")
 
@@ -415,7 +458,7 @@ def formatar_trava(trava: dict, preco_atual: float) -> str:
     vi1 = trava.get("vol_impl_comprado")
     vi2 = trava.get("vol_impl_vendido")
     if vi1 is not None:
-        extras.append(f"  📊 Vol impl.: {vi1*100:.1f}% / {vi2*100:.1f}%" if vi2 is not None else f"  📊 Vol impl.: {vi1*100:.1f}%")
+        extras.append(f"  📊 Vol impl.: {vi1:.1f}% / {vi2:.1f}%" if vi2 is not None else f"  📊 Vol impl.: {vi1:.1f}%")
     d1 = trava.get("delta_comprado")
     d2 = trava.get("delta_vendido")
     if d1 is not None:
@@ -428,10 +471,10 @@ def formatar_trava(trava: dict, preco_atual: float) -> str:
     v2 = trava.get("volume_vendido")
     if n1 is not None:
         extras.append(
-            f"  💧 Liquidez: {n1:.0f} neg. / {v1:.0f} vol (compra) · "
-            f"{n2:.0f} neg. / {v2:.0f} vol (venda)"
+            f"  💧 Liquidez: {n1:.0f} neg. / {v1 if v1 is not None else 'N/D'} vol (compra) · "
+            f"{n2:.0f} neg. / {v2 if v2 is not None else 'N/D'} vol (venda)"
             if n2 is not None else
-            f"  💧 Liquidez: {n1:.0f} neg. / {v1:.0f} vol"
+            f"  💧 Liquidez: {n1:.0f} neg. / {v1 if v1 is not None else 'N/D'} vol"
         )
     return "\n".join(linhas + extras)
 
@@ -459,31 +502,40 @@ def calcular_trava_manual(direcao: str, strike_comprado: float, premio_comprado:
     tipo = "call" if direcao == "compra" else "put"
     nome = "TRAVA DE ALTA (Bull Call Spread)" if direcao == "compra" else "TRAVA DE BAIXA (Bear Put Spread)"
 
-    premio_comprado = max(float(premio_comprado), 0.0)
-    premio_vendido = max(float(premio_vendido), 0.0)
-    custo_liquido = round(premio_comprado - premio_vendido, 2)
-    if custo_liquido < 0.05:
-        custo_liquido = round(premio_comprado, 2)  # não pode ficar de graça
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in (strike_comprado, strike_vendido,
+               premio_comprado, premio_vendido, contratos, gasto_maximo)):
+        raise ValueError("Valores da trava devem ser números finitos")
+    if int(contratos) != contratos:
+        raise ValueError("Contratos devem ser inteiros")
+    if min(strike_comprado, strike_vendido, contratos, gasto_maximo) <= 0 or min(premio_comprado, premio_vendido) < 0:
+        raise ValueError("Strikes, contratos e orçamento devem ser positivos; prêmios não negativos")
+    strike_comprado, strike_vendido, premio_comprado, premio_vendido = (
+        Decimal(str(v)) for v in (strike_comprado, strike_vendido, premio_comprado, premio_vendido))
+    contratos = int(contratos)
+    custo_liquido = premio_comprado - premio_vendido
+    largura = abs(strike_vendido - strike_comprado)
+    if not 0 < custo_liquido < largura:
+        raise ValueError("Custo líquido deve ser positivo e menor que a largura da trava")
 
-    custo_total = round(custo_liquido * contratos, 2)
+    custo_total = custo_liquido * contratos
 
     if direcao == "compra":
         if strike_vendido <= strike_comprado:
             raise ValueError("Na compra, o strike vendido deve ser MAIOR que o comprado")
         largura = strike_vendido - strike_comprado
-        ganho_max = round((largura - custo_liquido) * contratos, 2)
-        breakeven = round(strike_comprado + custo_liquido, 2)
+        ganho_max = (largura - custo_liquido) * contratos
+        breakeven = strike_comprado + custo_liquido
         encerrar_quando = strike_comprado
     else:
         if strike_vendido >= strike_comprado:
             raise ValueError("Na venda, o strike vendido deve ser MENOR que o comprado")
         largura = strike_comprado - strike_vendido
-        ganho_max = round((largura - custo_liquido) * contratos, 2)
-        breakeven = round(strike_comprado - custo_liquido, 2)
+        ganho_max = (largura - custo_liquido) * contratos
+        breakeven = strike_comprado - custo_liquido
         encerrar_quando = strike_comprado
 
     risco_max = custo_total
-    dentro_orcamento = custo_total <= gasto_maximo
+    dentro_orcamento = custo_total <= Decimal(str(gasto_maximo))
 
     # Relação risco/retorno (quantas vezes o ganho cobre o risco)
     if risco_max > 0:
@@ -494,18 +546,18 @@ def calcular_trava_manual(direcao: str, strike_comprado: float, premio_comprado:
     compensa = (
         dentro_orcamento
         and custo_liquido > 0
-        and relacao_rr >= 2.0
+        and ganho_max >= 2 * risco_max
         and ganho_max > risco_max
     )
 
-    return {
+    resultado = {
         "nome": nome,
         "direcao": direcao,
         "tipo": tipo,
         "strike_comprado": strike_comprado,
         "strike_vendido": strike_vendido,
-        "premio_comprado": round(premio_comprado, 2),
-        "premio_vendido": round(premio_vendido, 2),
+        "premio_comprado": premio_comprado,
+        "premio_vendido": premio_vendido,
         "custo_liquido": custo_liquido,
         "contratos": contratos,
         "custo_total": custo_total,
@@ -523,6 +575,8 @@ def calcular_trava_manual(direcao: str, strike_comprado: float, premio_comprado:
             "liquidez (bid/ask e volume) das duas pernas antes de executar."
         ),
     }
+    return {campo: float(valor) if isinstance(valor, Decimal) else valor
+            for campo, valor in resultado.items()}
 
 
 def formatar_trava_manual(trava: dict) -> str:

@@ -9,31 +9,55 @@ from estado import carregar_estado, salvar_estado, score_suavizado, atualizar_es
 
 def test_score_suavizado_primeiro_dia():
     estado = {}
-    s = score_suavizado(estado, "PETR4", 10)
+    s = score_suavizado(estado, "PETR4", 10, "compra")
     assert s == 10
-    assert estado["PETR4"]["score_history"] == [10]
+    assert estado["PETR4"]["score_history"] == [{"score": 10, "direcao": "compra"}]
+
+
+def _historico(scores, direcao="compra", dias=1):
+    return {"PETR4": {
+        "score_history": [{"score": s, "direcao": direcao} for s in scores],
+        "ultima_data_score": (date.today() - timedelta(days=dias)).isoformat(),
+    }}
 
 
 def test_score_suavizado_segundo_dia():
-    estado = {"PETR4": {"score_history": [10], "ultima_data_score": (date.today() - timedelta(days=1)).isoformat()}}
-    s = score_suavizado(estado, "PETR4", 4)
+    estado = _historico([10])
+    s = score_suavizado(estado, "PETR4", 4, "compra")
     assert s == 7  # (10 + 4) / 2 = 7
-    assert estado["PETR4"]["score_history"] == [10, 4]
+    assert estado == _historico([10, 4], dias=0)
 
 
 def test_score_suavizado_terceiro_dia():
-    estado = {"PETR4": {"score_history": [10, 4], "ultima_data_score": (date.today() - timedelta(days=1)).isoformat()}}
-    s = score_suavizado(estado, "PETR4", 4)
+    estado = _historico([10, 4])
+    s = score_suavizado(estado, "PETR4", 4, "compra")
     assert s == 6  # (10 + 4 + 4) / 3 = 6
-    assert estado["PETR4"]["score_history"] == [10, 4, 4]
+    assert estado == _historico([10, 4, 4], dias=0)
 
 
 def test_score_suavizado_nao_repete_mesmo_dia():
-    estado = {"PETR4": {"score_history": [10], "ultima_data_score": date.today().isoformat()}}
-    s = score_suavizado(estado, "PETR4", 4)
-    # Mesmo dia: não adiciona ao histórico, retorna média atual
-    assert s == 10
-    assert estado["PETR4"]["score_history"] == [10]
+    estado = _historico([10], dias=0)
+    s = score_suavizado(estado, "PETR4", 4, "compra")
+    assert s == 4
+    assert estado == _historico([4], dias=0)
+
+
+def test_score_suavizado_inversao_e_atualizacao_mesmo_dia():
+    estado = _historico([9, 9])
+    assert score_suavizado(estado, "PETR4", 5, "venda") == 5
+    assert score_suavizado(estado, "PETR4", 7, "venda") == 7
+    historico = estado["PETR4"]["score_history"]
+    assert len(historico) == 3
+    assert historico[-1] == {"score": 7, "direcao": "venda"}
+    estado["PETR4"]["ultima_data_score"] = "2020-01-01"
+    # Nao reutiliza a compra antiga ao voltar a comprar.
+    assert score_suavizado(estado, "PETR4", 6, "compra") == 6
+
+
+def test_score_suavizado_descarta_legado_sem_direcao():
+    estado = {"PETR4": {"score_history": [9, 9], "direcao": "compra"}}
+    assert score_suavizado(estado, "PETR4", 5, "venda") == 5
+    assert estado["PETR4"]["score_history"] == [{"score": 5, "direcao": "venda"}]
 
 
 def test_score_suavizado_mantem_janela():
@@ -41,17 +65,17 @@ def test_score_suavizado_mantem_janela():
     for i in range(1, 6):
         # Dias distintos: 5 dias atrás, 4, 3, 2, 1 (nunca hoje)
         estado["PETR4"]["ultima_data_score"] = (date.today() - timedelta(days=6 - i)).isoformat()
-        score_suavizado(estado, "PETR4", i)
+        score_suavizado(estado, "PETR4", i, "compra")
     # Janela = 3: só deve manter os últimos 3
     assert len(estado["PETR4"]["score_history"]) == 3
-    assert estado["PETR4"]["score_history"] == [3, 4, 5]
+    assert estado == _historico([3, 4, 5], dias=0)
 
 
 def test_score_suavizado_fora_limites():
     estado = {"PETR4": {"score_history": [], "ultima_data_score": ""}}
-    s = score_suavizado(estado, "PETR4", -1)
+    s = score_suavizado(estado, "PETR4", -1, "compra")
     assert s >= 0
-    s = score_suavizado(estado, "PETR4", 15)
+    s = score_suavizado(estado, "PETR4", 15, "compra")
     assert s <= 10
 
 
