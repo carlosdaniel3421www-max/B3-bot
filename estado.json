@@ -15,9 +15,10 @@
     "direcao": "compra",
     "data_primeiro_alerta": "2026-08-28",
     "score_history": [
-      5,
-      8,
-      7
+      {
+        "score": 5,
+        "direcao": "compra"
+      }
     ],
     "ultima_data_score": "2026-09-09"
   },
@@ -34,9 +35,10 @@
     "direcao": "compra",
     "data_primeiro_alerta": "2026-09-02",
     "score_history": [
-      7,
-      8,
-      7
+      {
+        "score": 7,
+        "direcao": "compra"
+      }
     ],
     "ultima_data_score": "2026-09-09"
   },
@@ -45,9 +47,10 @@
     "direcao": "compra",
     "data_primeiro_alerta": "2026-09-02",
     "score_history": [
-      7,
-      7,
-      7
+      {
+        "score": 7,
+        "direcao": "compra"
+      }
     ],
     "ultima_data_score": "2026-09-09"
   },
@@ -56,17 +59,19 @@
     "direcao": "compra",
     "data_primeiro_alerta": "2026-09-02",
     "score_history": [
-      5,
-      5,
-      4
+      {
+        "score": 5,
+        "direcao": "compra"
+      }
     ],
     "ultima_data_score": "2026-09-09"
   },
   "BBDC4": {
     "score_history": [
-      5,
-      4,
-      4
+      {
+        "score": 5,
+        "direcao": "venda"
+      }
     ],
     "ultima_data_score": "2026-09-09"
   },
@@ -80,35 +85,28 @@
   },
   "CMIG4": {
     "score_history": [
-      4,
-      5,
-      5
+      {
+        "score": 4,
+        "direcao": "venda"
+      }
     ],
     "ultima_data_score": "2026-09-09"
   },
   "ITUB4": {
     "score_history": [
-      4,
-      4,
-      4
+      {
+        "score": 4,
+        "direcao": "venda"
+      }
     ],
     "ultima_data_score": "2026-09-09"
   },
   "ABEV3": {
     "score_history": [
-      4,
-      4,
-      4
-    ],
-    "ultima_data_score": "2026-09-09"
-  },
-  "VALE3": {
-    "score": 6,
-    "direcao": "compra",
-    "data_primeiro_alerta": "2026-09-08",
-    "score_history": [
-      6,
-      4
+      {
+        "score": 4,
+        "direcao": "venda"
+      }
     ],
     "ultima_data_score": "2026-09-09"
   },
@@ -121,20 +119,16 @@
   },
   "JBSS32": {
     "score_history": [
-      4,
-      5
+      {
+        "score": 2,
+        "direcao": "neutro"
+      }
     ],
     "ultima_data_score": "2026-09-09"
   },
   "PRIO3": {
     "score_history": [
       5
-    ],
-    "ultima_data_score": "2026-09-09"
-  },
-  "RAIL3": {
-    "score_history": [
-      4
     ],
     "ultima_data_score": "2026-09-09"
   }
