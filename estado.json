@@ -10,11 +10,11 @@
         "direcao": "compra"
       },
       {
-        "score": 4,
+        "score": 5,
         "direcao": "compra"
       }
     ],
-    "ultima_data_score": "2026-09-29"
+    "ultima_data_score": "2026-09-30"
   },
   "CMIG4": {
     "score_history": [
@@ -27,89 +27,80 @@
         "direcao": "neutro"
       },
       {
-        "score": 2,
+        "score": 1,
         "direcao": "neutro"
       }
     ],
-    "ultima_data_score": "2026-09-29"
-  },
-  "BBAS3": {
-    "score_history": [
-      {
-        "score": 2,
-        "direcao": "neutro"
-      },
-      {
-        "score": 2,
-        "direcao": "neutro"
-      },
-      {
-        "score": 2,
-        "direcao": "neutro"
-      }
-    ],
-    "ultima_data_score": "2026-09-29"
-  },
-  "ABEV3": {
-    "score_history": [
-      {
-        "score": 2,
-        "direcao": "neutro"
-      },
-      {
-        "score": 2,
-        "direcao": "neutro"
-      },
-      {
-        "score": 2,
-        "direcao": "neutro"
-      }
-    ],
-    "ultima_data_score": "2026-09-29"
+    "ultima_data_score": "2026-09-30"
   },
   "RENT3": {
     "score_history": [
       {
         "score": 4,
         "direcao": "compra"
-      }
-    ],
-    "ultima_data_score": "2026-09-29"
-  },
-  "SUZB3": {
-    "score_history": [
+      },
       {
-        "score": 4,
+        "score": 6,
         "direcao": "compra"
       }
     ],
-    "ultima_data_score": "2026-09-29"
+    "ultima_data_score": "2026-09-30"
   },
-  "WEGE3": {
+  "JBSS32": {
+    "score": 6,
+    "direcao": "venda",
+    "data_primeiro_alerta": "2026-09-30",
+    "score_history": [
+      {
+        "score": 6,
+        "direcao": "venda"
+      }
+    ],
+    "ultima_data_score": "2026-09-30"
+  },
+  "RAIL3": {
+    "score_history": [
+      {
+        "score": 5,
+        "direcao": "compra"
+      }
+    ],
+    "ultima_data_score": "2026-09-30"
+  },
+  "GGBR4": {
     "score_history": [
       {
         "score": 2,
         "direcao": "neutro"
       }
     ],
-    "ultima_data_score": "2026-09-29"
+    "ultima_data_score": "2026-09-30"
   },
-  "PETR4": {
+  "LREN3": {
     "score_history": [
       {
         "score": 2,
         "direcao": "neutro"
       }
     ],
-    "ultima_data_score": "2026-09-29"
+    "ultima_data_score": "2026-09-30"
   },
-  "BBDC4": {
+  "B3SA3": {
     "score_history": [
       {
         "score": 2,
         "direcao": "neutro"
       }
     ],
-    "ultima_data_score": "2026-09-29"
+    "ultima_data_score": "2026-09-30"
+  },
+  "ITUB4": {
+    "score_history": [
+      {
+        "score": 1,
+        "direcao": "neutro"
+      }
+    ],
+    "ultima_data_score": "2026-09-30"
   }
 }
