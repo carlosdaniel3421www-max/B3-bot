@@ -387,12 +387,13 @@ def test_replace_falha_preserva_local_e_limpa_temp(sa, monkeypatch, tmp_path):
 def test_restauracao_opcional_404_e_http_falha(sa, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    assert sa._baixar_estado_do_github()
-    monkeypatch.setenv("GITHUB_TOKEN", "fake")
+    # Sem token: fallback ANONIMO (repositorio publico); 404 = nada a restaurar.
     get = Mock(return_value=resposta(status=404))
     monkeypatch.setattr(requests, "get", get)
     assert sa._baixar_estado_do_github()
+    monkeypatch.setenv("GITHUB_TOKEN", "fake")
     get.return_value = resposta(status=403)
+    # Token invalido: autenticado 403 e anonimo 403 -> falha, estado local.
     assert not sa._baixar_estado_do_github()
     assert not list(tmp_path.iterdir())
 

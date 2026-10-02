@@ -33,11 +33,12 @@ IA travada ocupa o unico worker, mas nao bloqueia ACK nem health HTTP.
 /ready valida startup e consulta getWebhookInfo (nao testa IA/persistencia).
 Importar app via WSGI nao executa restauracao/registro e deixa ready indisponivel;
 o comando de deploy suportado continua sendo python servidor_api.py.
-GITHUB_TOKEN continua opcional; sem ele o disco efemero nao tem restauracao
-remota. Com token, o download tenta 3 vezes por arquivo; falha final inicia o
-servidor com o ESTADO LOCAL e aviso em log (um bot morto recebe nada: melhor
-degradar a persistencia do que perder todos os comandos). /carteira mostra o
-estado carregado; conferir os logs. 404 mantem o comportamento legado.
+GITHUB_TOKEN continua opcional; sem ele, ou com token expirado/sem permissao,
+a restauracao cai para tentativas ANONIMAS (o repositorio e publico). Falha
+final de download/validacao inicia o servidor com o ESTADO LOCAL e aviso em
+log (um bot morto recebe nada: melhor degradar a persistencia do que perder
+todos os comandos). /carteira mostra o estado carregado; conferir os logs.
+404 mantem o comportamento legado.
 """
 
 import hmac
@@ -89,65 +90,81 @@ def _configuracao_valida():
 
 def _baixar_estado_do_github():
     """
-    Na inicialização, baixa o posicoes.json do GitHub para restaurar o estado.
-    O disco do Render é efêmero — sem isso, reinícios perdem as posições.
+    Na inicialização, baixa posicoes.json/propostas.json do GitHub para
+    restaurar o estado. O disco do Render é efêmero — sem isso, reinícios
+    perdem as posições.
+
+    O repositório é PÚBLICO: se o GITHUB_TOKEN do Render estiver ausente,
+    expirado ou sem permissão (tokens fine-grained têm validade), cai para
+    tentativas ANÔNIMAS (limite de ~60 requisições/hora, suficiente para
+    boots raros). Assim a restauração não depende de um token válido e as
+    posições não somem do /posicoes. Falha final inicia com o estado local
+    e aviso em log — nunca mata o servidor.
     """
     import requests as req
 
     token = os.environ.get("GITHUB_TOKEN", "")
-    if not token:
-        logger.info("GITHUB_TOKEN ausente — usando estado local (se houver).")
-        return True
-
     repo = "carlosdaniel3421www-max/B3-bot"
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
-
     sucesso = True
     for arquivo in ("posicoes.json", "propostas.json"):
         url = f"https://api.github.com/repos/{repo}/contents/{arquivo}"
         temporario = None
         arquivo_ok = False
-        # Falha transitória (rede, rate limit, GitHub instável) não pode matar
-        # o startup: tenta 3 vezes antes de declarar o arquivo indisponível.
-        for tentativa in range(1, 4):
-            try:
-                resp = req.get(url, headers=headers, params={"ref": "main"}, timeout=(5, 15))
-                if resp.status_code == 200:
-                    import base64
-                    conteudo = base64.b64decode(resp.json().get("content", "")).decode("utf-8")
-                    dados = json.loads(conteudo)
-                    if not isinstance(dados, dict) or not all(isinstance(v, dict) for v in dados.values()):
-                        raise ValueError("Estado deve ser um mapa de registros JSON")
-                    # Mesmo diretorio para replace atomico; {} e um estado valido.
-                    with tempfile.NamedTemporaryFile(
-                        mode="w", encoding="utf-8", dir=os.path.dirname(os.path.abspath(arquivo)),
-                        prefix=f".{arquivo}.", suffix=".tmp", delete=False,
-                    ) as f:
-                        temporario = f.name
-                        json.dump(dados, f, ensure_ascii=False, allow_nan=False)
-                        f.flush()
-                        os.fsync(f.fileno())
-                    os.replace(temporario, arquivo)
-                    temporario = None
-                    logger.info("Estado restaurado do GitHub: %s", arquivo)
-                    arquivo_ok = True
-                    break
-                elif resp.status_code == 404:
-                    logger.info("Arquivo %s ainda não existe no GitHub — estado local mantido", arquivo)
-                    arquivo_ok = True
-                    break
-                else:
-                    logger.warning("Falha ao restaurar %s (tentativa %d): HTTP %s",
-                                   arquivo, tentativa, resp.status_code)
-            except Exception as e:
-                logger.warning("Falha ao baixar %s (tentativa %d): %s",
-                               arquivo, tentativa, type(e).__name__)
-            finally:
-                if temporario is not None:
-                    os.unlink(temporario)
-                    temporario = None
-            if tentativa < 3:
-                time.sleep(min(2 * tentativa, 5))
+        # Autenticado primeiro (se houver token); anônimo como fallback:
+        # token expirado no Render não pode deixar as posições invisíveis.
+        tentativas_headers = []
+        if token:
+            tentativas_headers.append(
+                {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"})
+        tentativas_headers.append({"Accept": "application/vnd.github.v3+json"})
+        for headers in tentativas_headers:
+            anonimo = "Authorization" not in headers
+            # Falha transitória (rede, rate limit, GitHub instável) não pode
+            # matar o startup: tenta 3 vezes antes de declarar indisponível.
+            for tentativa in range(1, 4):
+                try:
+                    resp = req.get(url, headers=headers, params={"ref": "main"}, timeout=(5, 15))
+                    if resp.status_code == 200:
+                        import base64
+                        conteudo = base64.b64decode(resp.json().get("content", "")).decode("utf-8")
+                        dados = json.loads(conteudo)
+                        if not isinstance(dados, dict) or not all(isinstance(v, dict) for v in dados.values()):
+                            raise ValueError("Estado deve ser um mapa de registros JSON")
+                        # Mesmo diretorio para replace atomico; {} e um estado valido.
+                        with tempfile.NamedTemporaryFile(
+                            mode="w", encoding="utf-8", dir=os.path.dirname(os.path.abspath(arquivo)),
+                            prefix=f".{arquivo}.", suffix=".tmp", delete=False,
+                        ) as f:
+                            temporario = f.name
+                            json.dump(dados, f, ensure_ascii=False, allow_nan=False)
+                            f.flush()
+                            os.fsync(f.fileno())
+                        os.replace(temporario, arquivo)
+                        temporario = None
+                        logger.info("Estado restaurado do GitHub%s: %s",
+                                    " (anonimo)" if anonimo else "", arquivo)
+                        arquivo_ok = True
+                        break
+                    elif resp.status_code == 404:
+                        logger.info("Arquivo %s ainda não existe no GitHub — estado local mantido", arquivo)
+                        arquivo_ok = True
+                        break
+                    else:
+                        logger.warning("Falha ao restaurar %s%s (tentativa %d): HTTP %s",
+                                       arquivo, " (anonimo)" if anonimo else "",
+                                       tentativa, resp.status_code)
+                except Exception as e:
+                    logger.warning("Falha ao baixar %s%s (tentativa %d): %s",
+                                   arquivo, " (anonimo)" if anonimo else "",
+                                   tentativa, type(e).__name__)
+                finally:
+                    if temporario is not None:
+                        os.unlink(temporario)
+                        temporario = None
+                if tentativa < 3:
+                    time.sleep(min(2 * tentativa, 5))
+            if arquivo_ok:
+                break
         if not arquivo_ok:
             sucesso = False
     return sucesso
