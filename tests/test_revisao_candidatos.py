@@ -127,6 +127,11 @@ def test_classificador_real_sem_novo_padrao_mantem(ambiente):
 def test_plano_anterior_futuro_mesmo_dia_ou_expirado_nao_reutiliza(ambiente, idade):
     a = ambiente
     a.data.atual = date(2030, 1, 4) + timedelta(days=idade)
+    # O relatorio trabalha so com sessoes FECHADAS: nunca ve candle de hoje
+    # ou do futuro. Sem esse corte, a varredura encontraria o candle do sinal
+    # como candidato "novo" em vez de exercitar o caminho de reuso.
+    a.resultado["df"] = a.resultado["df"].loc[
+        a.resultado["df"].index.date < a.data.today()]
     rd.montar_bloco_resumo(a.resultado, {}, 6)
     assert not a.resultado["entrada_permitida"]
     assert a.dados == {"OUTRO": {"intacto": True}}

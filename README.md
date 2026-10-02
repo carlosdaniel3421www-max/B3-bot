@@ -179,13 +179,18 @@ substitui automaticamente por BS, inclusive no modo legado. A sugestao isolada
 de CALL/PUT sem cotacao continua identificada como teorica dentro de 14..30 dias.
 `/trava` sem vencimento e somente calculadora: nao certifica esta politica.
 
-Com IBOV lateral, compra exige retorno proprio positivo em 5 sessoes e superar
-o indice em 5 e 10 sessoes. Venda exige retorno proprio negativo e ficar abaixo
-do indice nas duas janelas. Historicos devem ter as ultimas 11 datas iguais,
-validas e fechadas. Dados ausentes/desalinhados bloqueiam a excecao. Nao ha bonus
-de score; setup, gatilho, exaustao, risco agregado e liquidez continuam exigidos.
-Isso evita esperar obrigatoriamente uma tendencia do indice; nao garante
-oportunidades diarias nem que o movimento ocorra antes do vencimento.
+Com IBOV lateral, compra exige retorno proprio positivo e superar o indice nas
+ultimas 5 sessoes comuns; venda exige o espelho negativo. A janela de 10 sessoes
+e informativa, nao veto. Historicos de ativo e IBOV sao alinhados pela
+INTERSECAO de datas (feeds do Yahoo divergem em ate 2 dias corridos entre si;
+mais que isso a comparacao e rejeitada), com pelo menos 11 datas comuns, validas
+e fechadas. Dados ausentes bloqueiam a excecao lateral, sem bonus de score;
+setup, gatilho, exaustao, risco agregado e liquidez continuam exigidos.
+Um setup pode vir do candle do dia OU de ate 4 sessoes anteriores ainda
+intactas (sem stop, alvo ou gatilho tocados); gatilho alcancado apos o sinal
+cancela — nao se persegue preco. Isso evita esperar obrigatoriamente uma
+tendencia do indice; nao garante oportunidades diarias nem que o movimento
+ocorra antes do vencimento.
 
 Travas automaticas passam a ser selecionadas pela tese na acao, com strikes
 entre preco e alvo, breakeven compativel, mesmo vencimento e evidencia temporal

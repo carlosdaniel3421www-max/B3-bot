@@ -41,19 +41,20 @@ def test_direcao_absoluta_e_dois_diferenciais(fim_ativo, fim_ibov, compra, venda
 
 
 @pytest.mark.parametrize("direcao", ["compra", "venda"])
-def test_dez_dias_tambem_precisam_confirmar(direcao):
+def test_dez_dias_e_informativo_nao_veta(direcao):
     ativo, ibov = historicos(110 if direcao == "compra" else 90)
-    ativo.iloc[0, 0] = 120 if direcao == "compra" else 80
+    ativo.iloc[0, 0] = 120 if direcao == "compra" else 80  # 10d contra a direcao
     r = b3.comparar_forca_relativa(ativo, ibov)
     assert r["disponivel"]
-    assert not r["alinhada"][direcao]
+    assert r["alinhada"][direcao]  # janela de 5 sessoes confirma
+    assert (r["diferenca_10d_pp"] < 0) == (direcao == "compra")
 
 
 @pytest.mark.parametrize("lado", ["ativo", "ibov"])
 @pytest.mark.parametrize("defeito", [
     "vazio", "curto", "nan", "infinito", "zero", "negativo", "texto", "booleano",
     "complexo", "duplicada", "intraday_duplicado", "nat", "desordenada", "numerica",
-    "ultima_diferente", "lacuna_data", "futuro",
+    "futuro",
 ])
 def test_historico_invalido_nao_libera(lado, defeito):
     ativo, ibov = historicos(n=20)
@@ -99,6 +100,44 @@ def test_nan_em_ambos_nao_comprime_janela():
     ativo, ibov = historicos(n=20)
     ativo.iloc[-4, 0] = ibov.iloc[-4] = np.nan
     assert not b3.comparar_forca_relativa(ativo, ibov)["disponivel"]
+
+
+def test_feed_uma_sessao_desalinhado_e_tolerado():
+    # Cenario real de 2026-10: IBOV chega com um pregao a mais que as acoes.
+    # Exigir as ultimas 11 datas IGUAIS reprovava todos os ativos e zerava os
+    # sinais em mercado lateral. Intersecao corrige sem afrouxar o criterio.
+    datas_ibov = pd.bdate_range(end="2026-09-08", periods=15)
+    ativo = pd.DataFrame(
+        {"close": np.linspace(100, 110, 16)},
+        index=datas_ibov.union([pd.Timestamp("2026-09-09")]))
+    ibov = pd.Series(np.linspace(100, 102, 15), index=datas_ibov)
+    r = b3.comparar_forca_relativa(ativo, ibov, agora="2026-09-10")
+    assert r["disponivel"]
+    assert r["observacoes"] == 11
+    assert r["data_final"] == "2026-09-08"  # ultima data COMUM
+
+
+@pytest.mark.parametrize("dias,disponivel", [(2, True), (3, False)])
+def test_limite_de_dois_dias_de_defasagem_entre_feeds(dias, disponivel):
+    datas_ibov = pd.bdate_range(end="2026-09-08", periods=15)
+    extra = pd.bdate_range("2026-09-09", periods=dias)
+    ativo = pd.DataFrame(
+        {"close": np.linspace(100, 110, 15 + dias)},
+        index=datas_ibov.union(extra))
+    ibov = pd.Series(np.linspace(100, 102, 15), index=datas_ibov)
+    r = b3.comparar_forca_relativa(ativo, ibov, agora="2026-09-12")
+    assert r["disponivel"] is disponivel
+
+
+def test_lacuna_de_data_usa_intersecao_sem_comprimir_precos():
+    ativo, ibov = historicos(n=20)
+    r = b3.comparar_forca_relativa(ativo, ibov.drop(ibov.index[-4]), agora="2026-09-09")
+    assert r["disponivel"] and r["observacoes"] == 11
+    # 10 datas comuns (< 11) rejeita:
+    ativo2, ibov2 = historicos(n=12)
+    r2 = b3.comparar_forca_relativa(ativo2, ibov2.drop([ibov2.index[-3], ibov2.index[-4]]),
+                                    agora="2026-09-09")
+    assert not r2["disponivel"]
 
 
 def test_historico_antigo_extra_nao_exige_mesmo_inicio():
@@ -164,7 +203,7 @@ def test_screener_condicional(monkeypatch, curto, direcao, fim_ativo, fim_ibov, 
     baixar.assert_called_once_with("TEST4", periodo="1y", incluir_atual=False)
 
 
-@pytest.mark.parametrize("defeito", ["ausente", "vazio", "defasado", "desalinhado"])
+@pytest.mark.parametrize("defeito", ["ausente", "vazio", "defasado", "fora_do_limite"])
 def test_lateral_sem_evidencia_sempre_teto_sete(monkeypatch, defeito):
     ativo, regime, _ = preparar_screener(monkeypatch)
     if defeito == "ausente":
@@ -174,8 +213,9 @@ def test_lateral_sem_evidencia_sempre_teto_sete(monkeypatch, defeito):
     elif defeito == "defasado":
         ativo.index = ativo.index - pd.Timedelta(days=10)
         regime["historico_fechamentos"].index = ativo.index
-    else:
-        regime["historico_fechamentos"] = regime["historico_fechamentos"].iloc[:-1]
+    else:  # fora_do_limite: IBOV termina 4 dias corridos depois da acao
+        serie = regime["historico_fechamentos"]
+        serie.index = serie.index + pd.Timedelta(days=4)
     r = screener._processar_ativo("TEST4", "1y", False, False, False, regime)
     assert r["score"] == 7
     assert not r["forca_relativa"]["disponivel"]

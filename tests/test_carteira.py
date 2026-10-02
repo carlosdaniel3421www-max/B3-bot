@@ -145,20 +145,26 @@ def test_parametros_globais_invalidos_levantam_valueerror(campo, valor):
 
 @pytest.mark.parametrize("valor", [None, "", "2026-02-30", "20260819", "19/08/2026",
                                     "2026-08-19T10:00:00", True])
-def test_data_invalida_nao_oculta_risco_calculavel(acao, valor):
+def test_data_invalida_avisa_sem_vetar_risco_calculavel(acao, valor):
     acao["data_entrada"] = valor
     r = avaliar_carteira({"PETR4": acao}, 10000)
     assert r["risco_reais"] == 200
-    assert r["status"] == "incompleto" and not r["permite_nova_operacao"]
+    assert r["status"] == "completo"
+    assert r["permite_nova_operacao"]
+    assert any("data_entrada" in a for a in r["alertas"])
+    assert any("corrija o registro" in a for a in r["alertas"])
 
 
 def test_datas_referencia_explicita_e_vencimento(trava, acao):
     r = avaliar_carteira({"PETR4": acao}, 10000, data_referencia="2026-08-18")
-    assert not r["permite_nova_operacao"]
+    assert r["permite_nova_operacao"]  # entrada futura: alerta, nao veto
+    assert any("futura" in a for a in r["alertas"])
     for vencimento in ("", "2026-02-30", "2026-08-18", "2026-08-20"):
         trava["vencimento"] = vencimento
         r = avaliar_carteira({"CMIG4": trava}, 10000, data_referencia="2026-08-20")
-        assert r["status"] == "incompleto" and r["risco_reais"] == 13
+        assert r["status"] == "completo" and r["risco_reais"] == 13
+        assert r["permite_nova_operacao"]
+        assert any("venc" in a.lower() for a in r["alertas"])
     with pytest.raises(ValueError):
         avaliar_carteira({}, 10000, data_referencia="amanha")
 

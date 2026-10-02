@@ -80,7 +80,32 @@ def _preparar_historico(df: pd.DataFrame, intervalo="1d", incluir_atual=False,
         df = df.loc[df.index + pd.Timedelta(hours=1) <= agora]
     else:
         df = df.loc[df.index <= agora]
-    _validar_dados(df, ("open", "high", "low", "close", "volume"))
+    # Linhas corrompidas do provedor (preco zero/negativo/NaN, volume invalido,
+    # OHLC incoerente) derrubavam o ATIVO INTEIRO — em 2026-09-09 sete tickers
+    # ficaram de fora do relatorio por causa disso. Descarta-se a linha ruim e
+    # segue com as sessoes validas; a validacao estrita continua no restante.
+    colunas = ("open", "high", "low", "close", "volume")
+    if set(colunas).issubset(df.columns) and len(df):
+        try:
+            numeros = df[list(colunas)].astype(float)
+            valido = (
+                np.isfinite(numeros.to_numpy()).all(axis=1)
+                & (numeros[["open", "high", "low", "close"]] > 0).all(axis=1)
+                & (numeros["volume"] >= 0)
+                & (numeros["low"] <= numeros[["open", "close"]].min(axis=1))
+                & (numeros["high"] >= numeros[["open", "close"]].max(axis=1))
+                & (numeros["open"] >= numeros["low"])
+                & (numeros["open"] <= numeros["high"])
+            )
+            if not valido.all():
+                descartadas = int((~valido).sum())
+                df = df.loc[valido]
+                logging.getLogger(__name__).warning(
+                    "Historico: %d linha(s) corrompida(s) descartada(s); seguem %d sessoes.",
+                    descartadas, len(df))
+        except (TypeError, ValueError):
+            pass  # coluna nao numerica etc.: _validar_dados reporta o problema
+    _validar_dados(df, colunas)
     return df
 
 
@@ -1026,15 +1051,26 @@ def calcular_eficiencia(serie: pd.Series, n: int = 10) -> float:
 
 def comparar_forca_relativa(df_ativo: pd.DataFrame, serie_ibov: pd.Series,
                             *, agora=None) -> dict:
-    """Compara retornos de 5/10 sessoes, sem IO, mutacao ou consulta ao relogio.
+    """Compara retornos de sessoes COMUNS, sem IO, mutacao ou consulta ao relogio.
+
+    Feeds do Yahoo para acao e ^BVSP costumam divergir em uma sessao (o IBOV
+    chega com um pregao a mais ou a menos que as acoes). Por isso o alinhamento
+    e pela INTERSECAO de datas, tolerando ate 2 dias corridos de defasagem
+    entre as series; mais que isso, a comparacao fica stale e e rejeitada.
+    As janelas contam SESSOES COMUNS: lacuna em uma serie remove aquela data
+    da comparacao nas duas, sem comprimir precos.
 
     Sem agora, as entradas devem conter somente sessoes fechadas. Com agora,
-    exclui hoje (mesma politica conservadora do diario) e rejeita defasagem
-    superior a 4 dias corridos. O screener sempre fornece essa referencia.
-    Exige as ultimas 11 datas iguais, sem dropna/intersecao que comprima gaps.
+    exclui hoje (mesma politica conservadora do diario), e a ultima data COMUM
+    nao pode estar defasada mais de 4 dias corridos. O screener sempre passa
+    essa referencia.
+
+    Alinhacao de candidato usa a janela de 5 sessoes (horizonte operacional de
+    opcoes <=30d): retorno proprio na direcao E desempenho versus IBOV na
+    mesma direcao. Os numeros de 10 sessoes permanecem informativos.
     Retornos em %, diferenciais ativo menos IBOV em pontos percentuais.
-    Limiar estrito zero e uma hipotese para candidatos de curto prazo (<=30d),
-    nao calibrada por backtest nem promessa de desempenho ou sinal de entrada.
+    Limiar estrito zero e hipotese, nao calibracao, promessa de desempenho
+    ou sinal de entrada.
     """
     resultado = {
         "disponivel": False, "alinhada": {"compra": False, "venda": False},
@@ -1079,12 +1115,18 @@ def comparar_forca_relativa(df_ativo: pd.DataFrame, serie_ibov: pd.Series,
             valores = serie.to_numpy(dtype=float, na_value=np.nan)
             if not np.isfinite(valores).all() or (valores <= 0).any():
                 raise ValueError("Fechamentos devem ser positivos e finitos, sem lacunas")
-            series.append(serie.iloc[-11:])
+            series.append(serie)
         ativo, ibov = series
-        if not ativo.index.equals(ibov.index):
-            raise ValueError("Ultimas 11 datas devem coincidir, inclusive o ultimo fechamento")
+        defasagem = abs((ativo.index[-1] - ibov.index[-1]).days)
+        if defasagem > 2:
+            raise ValueError(
+                f"Feeds desalinhados: ultimas sessoes distam {defasagem} dias corridos")
+        comum = ativo.index.intersection(ibov.index).sort_values()
+        if len(comum) < 11:
+            raise ValueError("Menos de 11 datas comuns entre ativo e IBOV")
+        ativo, ibov = ativo.loc[comum].iloc[-11:], ibov.loc[comum].iloc[-11:]
         if referencia is not None and (referencia - ativo.index[-1]).days > 4:
-            raise ValueError("Ultimo fechamento defasado mais de 4 dias corridos")
+            raise ValueError("Ultimo fechamento comum defasado mais de 4 dias corridos")
         retornos = {}
         with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
             for janela in (5, 10):
@@ -1100,8 +1142,8 @@ def comparar_forca_relativa(df_ativo: pd.DataFrame, serie_ibov: pd.Series,
         d5, d10 = retornos["diferenca_5d_pp"], retornos["diferenca_10d_pp"]
         resultado.update({
             "disponivel": True,
-            "alinhada": {"compra": a5 > 0 and d5 > 0 and d10 > 0,
-                         "venda": a5 < 0 and d5 < 0 and d10 < 0},
+            "alinhada": {"compra": a5 > 0 and d5 > 0,
+                         "venda": a5 < 0 and d5 < 0},
             "data_final": ativo.index[-1].date().isoformat(), "observacoes": 11,
             "motivo": (f"Ativo 5d {a5:+.2f}%; IBOV 5d {retornos['retorno_ibov_5d']:+.2f}%; "
                        f"diferencial 5d {d5:+.2f} p.p. / 10d {d10:+.2f} p.p."),
@@ -1173,7 +1215,7 @@ def classificar_regime_ibov(adx: float, di_pos: float, di_neg: float,
         ),
         "texto_aviso": (
             "Mercado lateral: teto 10 apenas condicional por ativo, sem bonus de score. "
-            "Compra exige retorno proprio 5d positivo e superar IBOV em 5d e 10d; "
+            "Compra exige retorno proprio 5d positivo e superar IBOV nas ultimas 5 sessoes; "
             "venda exige o espelho negativo. Sem confirmacao, teto 7/10. "
             "Setup e demais filtros de entrada continuam obrigatorios."
         ),

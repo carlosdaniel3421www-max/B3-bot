@@ -32,7 +32,7 @@ from posicoes import (
 from b3_swing_analyzer import sugerir_stop_alvo, plotar_grafico, determinar_veredito, avaliar_regime_ibov
 from trava import montar_trava, formatar_trava
 from telegram_utils import enviar_mensagem, enviar_album
-from setups import _data, classificar_setup, reutilizar_candidato
+from setups import _data, candidato_intacto, classificar_setup, reutilizar_candidato
 from carteira import avaliar_carteira, avaliar_nova_operacao, formatar_resumo_carteira
 
 # Garante que os logs de erro do ai_analyzer.py (status HTTP, mensagem,
@@ -81,6 +81,46 @@ def validar_configuracao() -> None:
         raise SystemExit(mensagem)
 
 
+def _classificar_setup_recente(df, direcao, janela: int = 4):
+    """Varre os ultimos (janela + 1) candles fechados e devolve o candidato
+    mais recente AINDA INTACTO, em vez de exigir o setup no candle de hoje.
+
+    Um sinal de poucos dias atras continua aproveitavel enquanto nenhuma
+    sessao posterior tocar stop, alvo ou gatilho; gatilho alcancado significa
+    momento de entrada passado (nao perseguir preco). A expiracao em dias
+    corridos continua checada pelo chamador, como antes. Usa classificar_setup
+    em cada prefixo, preservando o ponto de injecao dos testes.
+    """
+    motivo_invalidado = None
+    ultimo_aguardar = None
+    for i in range(len(df) - 1, max(len(df) - 1 - int(janela), -1), -1):
+        plano = classificar_setup(df.iloc[:i + 1], direcao)
+        if plano.get("estado") == "candidato":
+            if candidato_intacto(plano, df.iloc[i + 1:]):
+                return plano
+            motivo_invalidado = (
+                f"setup de {plano.get('data_sinal')} deixou de estar intacto "
+                "(stop, alvo ou gatilho tocado em sessao posterior)")
+            continue
+        if ultimo_aguardar is None and isinstance(plano, dict):
+            ultimo_aguardar = plano  # classificacao do candle mais recente
+    if motivo_invalidado is not None:
+        return {
+            "setup": None, "estado": "aguardar", "direcao": direcao,
+            "motivo": motivo_invalidado, "data_sinal": None,
+            "gatilho": None, "stop": None, "alvo": None,
+            "risco_retorno": None, "alvo_teorico": False,
+        }
+    if ultimo_aguardar is not None:
+        return ultimo_aguardar
+    return {
+        "setup": None, "estado": "aguardar", "direcao": direcao,
+        "motivo": "Nenhum setup nos ultimos candles fechados",
+        "data_sinal": None, "gatilho": None, "stop": None, "alvo": None,
+        "risco_retorno": None, "alvo_teorico": False,
+    }
+
+
 def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
                          atr_mult: float = 1.5, risco_retorno: float = 2.0,
                          risco_maximo_atr_mult: float = 3.0,
@@ -114,7 +154,7 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
                     f"({resultado_trimestral['data_resultado']})"
                 )
     if resultado["entrada_permitida"] and not cancelamento and config.EXIGIR_SETUP:
-        plano_setup = classificar_setup(resultado["df"], direcao)
+        plano_setup = _classificar_setup_recente(resultado["df"], direcao)
         if plano_setup["estado"] != "candidato":
             proposta = carregar_propostas().get(ticker.upper(), {})
             if (isinstance(proposta, dict) and proposta.get("estado_entrada") == "candidato"

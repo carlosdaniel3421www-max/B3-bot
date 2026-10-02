@@ -272,3 +272,36 @@ def validar_gatilho(plano, preco_atual, atr, data_pregao):
     else:
         resultado.update(estado="candidato", motivo="Cotacao elegivel na direcao do gatilho; nao comprova execucao")
     return resultado
+
+
+def candidato_intacto(plano, posteriores) -> bool:
+    """True se nenhuma sessao posterior tocou stop, alvo ou gatilho do plano.
+
+    Recebe o plano candidato e o DataFrame OHLCV das sessoes POSTERIORES ao
+    candle do sinal. Toco no gatilho significa que o momento da entrada ja
+    passou (nao perseguir preco); stop ou alvo tocados invalidam o plano.
+    Sem sessoes posteriores considera-se intacto; dados posteriores invalidos
+    (NaN/infinito/precos nao positivos) impedem atestar integridade.
+    Funcao pura, sem IO nem relogio.
+    """
+    if not isinstance(plano, dict) or plano.get("estado") != "candidato":
+        return False
+    if not all(_numero(plano.get(c)) and plano[c] > 0 for c in ("gatilho", "stop", "alvo")):
+        return False
+    sinal = 1 if plano.get("direcao") == "compra" else -1
+    if not isinstance(posteriores, pd.DataFrame) or posteriores.empty:
+        return True
+    if not {"high", "low"}.issubset(posteriores.columns):
+        return False
+    dados = posteriores[["high", "low"]].astype(float)
+    if not np.isfinite(dados.to_numpy()).all() or (dados <= 0).any().any():
+        return False
+    if sinal == 1:
+        tocou = ((dados["low"] <= plano["stop"]).any()
+                 or (dados["high"] >= plano["alvo"]).any()
+                 or (dados["high"] >= plano["gatilho"]).any())
+    else:
+        tocou = ((dados["high"] >= plano["stop"]).any()
+                 or (dados["low"] <= plano["alvo"]).any()
+                 or (dados["low"] <= plano["gatilho"]).any())
+    return not tocou

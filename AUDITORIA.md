@@ -117,6 +117,41 @@ Regressoes reproduzidas e corrigidas apos a primeira implementacao:
 Suite integrada desta revisao: 1642 testes passaram. Um aviso de deprecacao
 vem do SDK Google. Sem rede de producao, mudancas em posicoes reais ou deploy.
 
+## Incidente: Semana Sem Sinais (Out/2026)
+
+Sintoma: uma semana de relatorios sem nenhuma entrada. Diagnostico medido com
+dados reais apontou quatro bloqueios, todos corrigidos:
+
+1. **Forca relativa reprovava todos os ativos.** Os feeds do Yahoo para acoes
+   e ^BVSP divergiam em uma sessao (IBOV terminava 2026-10-01, as acoes
+   2026-09-30) e a exigencia de "ultimas 11 datas iguais" falhava para os 19
+   ativos. Em regime lateral, isso limitava todo mundo a 7/10 — causa raiz do
+   silencio. Correcao: alinhamento por INTERSECAO de datas, tolerancia de ate
+   2 dias corridos entre feeds, minimo de 11 datas comuns, ultima data comum
+   nao defasada mais de 4 dias.
+2. **Vencimento corrompido vetava a carteira inteira.** A trava CMIG4 tinha
+   vencimento "2026-10-1612:21" (invalido), marcando a carteira como
+   incompleta e bloqueando qualquer candidato. Correcao: problemas de DATA
+   viram alerta por posicao — o risco maximo continua computavel (stop na
+   acao, debito integral na trava) e nao esconde risco; so risco desconhecido
+   ou limites excedidos bloqueiam.
+3. **Setup so valia no candle do dia.** Sem padrao novo no candle exato do
+   relatorio, o sinal sumia mesmo dentro da validade. Correcao: varredura dos
+   ultimos 5 candles fechados, aceitando o candidato mais recente AINDA
+   intacto (nenhuma sessao posterior pode ter tocado stop, alvo ou gatilho;
+   gatilho alcancado = momento passado, nao se persegue preco). Expiracao em
+   dias corridos continua checada como antes.
+4. **Linha corrompida derrubava o ativo inteiro.** Em 2026-09-09, sete tickers
+   ficaram fora do relatorio por "Precos devem ser positivos". Correcao:
+   linhas corrompidas do provedor sao descartadas com aviso; o restante do
+   historico e validado normalmente. Historico inteiro corrompido continua
+   falhando de forma explicita.
+
+A confirmacao lateral passou a usar a janela de 5 sessoes comuns (horizonte
+operacional de opcoes <=30d); os numeros de 10 sessoes seguem informativos.
+Nenhum limite de risco foi afrouxado: score minimo, setup, gatilho, exaustao,
+carteira e liquidez continuam exigidos. Suite pos-correcao: 1779 testes.
+
 ## Politica de Prazo Curto
 
 Atualizacao apos esclarecer que o operador compra opcoes com ate um mes restante:

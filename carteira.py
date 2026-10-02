@@ -61,9 +61,13 @@ def avaliar_carteira(posicoes, capital, risco_max_pct=3,
     nominal bruto de ACOES na entrada/capital, sem compensar compra e venda.
     Debitos de travas sao separados, nao equivalem ao nominal do subjacente.
 
-    data_referencia: ISO opcional, nunca usa o relogio. Quando fornecida, rejeita
-    entrada futura e exige revisao de travas vencidas (mantendo seu risco).
-    Sem ela, valida formato e ordem das datas, mas nao vencimento atual.
+    data_referencia: ISO opcional, nunca usa o relogio. Problemas de DATA
+    (entrada futura, vencimento invalido/vencido/anterior a entrada) viram
+    ALERTA por posicao: o risco maximo continua computavel (stop na acao,
+    debito integral na trava), e um campo de data corrompido num registro
+    antigo nao pode vetar a carteira inteira. O que bloqueia novas
+    recomendacoes e risco DESCONHECIDO (quantidade/precos invalidos) ou
+    limites excedidos. Sem data_referencia, valida formato e ordem das datas.
 
     Retorna status completo/incompleto, risco_reais/pct, exposicao_nominal_acao,
     debito_travas, por_direcao, setores (None sem mapa), detalhes, alertas e
@@ -100,6 +104,7 @@ def avaliar_carteira(posicoes, capital, risco_max_pct=3,
     completo = True
     for identificador, registro in sorted(posicoes.items()):
         problemas = []
+        avisos = []
         item = {"ticker": identificador, "direcao": None, "tipo_operacao": None,
                 "quantidade": None, "risco_reais": None,
                 "exposicao_nominal_acao": None, "debito_travas": None,
@@ -119,15 +124,16 @@ def avaliar_carteira(posicoes, capital, risco_max_pct=3,
         try:
             inicio = _data(registro.get("data_entrada"), "data_entrada")
             if referencia is not None and inicio > referencia:
-                problemas.append("Data de entrada futura em relacao a referencia")
+                avisos.append("Data de entrada futura em relacao a referencia")
             if tipo == "trava":
                 vencimento = _data(registro.get("vencimento"), "vencimento")
                 if vencimento < inicio:
-                    problemas.append("Vencimento anterior a entrada")
+                    avisos.append("Vencimento anterior a entrada")
                 if referencia is not None and vencimento <= referencia:
-                    problemas.append("Trava vencida: verifique exercicio/liquidacao; risco mantido")
+                    avisos.append("Trava vencida: verifique exercicio/liquidacao; risco mantido")
         except ValueError as erro:
-            problemas.append(str(erro))
+            # Dado de data ruim nao esconde o risco maximo da posicao; alerta.
+            avisos.append(str(erro))
 
         setor = None
         if setores is not None and tipo == "acao":
@@ -190,6 +196,10 @@ def avaliar_carteira(posicoes, capital, risco_max_pct=3,
                 grupo[direcao] += nominal
         except ValueError as erro:
             problemas.append(str(erro))
+        if avisos:
+            alertas.extend(
+                f"{identificador}: {a} (risco contabilizado; corrija o registro)"
+                for a in avisos)
         if problemas:
             completo = False
             alertas.extend(f"{identificador}: {p}" for p in problemas)
