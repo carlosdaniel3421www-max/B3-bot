@@ -1,1 +1,26 @@
-{}
+{
+  "JBSS32": {
+    "ticker": "JBSS32",
+    "direcao": "venda",
+    "preco_entrada": 57.81,
+    "stop": 59.880001068115234,
+    "alvo": 53.66999786376953,
+    "prazo_maximo_dias": 20,
+    "data_proposta": "2026-10-02",
+    "plano_setup": {
+      "setup": "rompimento",
+      "estado": "candidato",
+      "motivo": "Plano candidato; aguardar cotacao posterior ao sinal. Alvo teorico: projecao 2R, sem barreira nas 60 anteriores.",
+      "direcao": "venda",
+      "data_sinal": "2026-09-30",
+      "gatilho": 57.81,
+      "stop": 59.880001068115234,
+      "alvo": 53.66999786376953,
+      "risco_retorno": 2.0,
+      "alvo_teorico": true,
+      "risco_retorno_min": 2.0,
+      "distancia_max_atr": 0.5
+    },
+    "estado_entrada": "candidato"
+  }
+}
