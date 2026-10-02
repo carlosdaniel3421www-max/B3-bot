@@ -1,6 +1,7 @@
 """Regressoes da semana sem sinais (out/2026): feed desalinhado, datas de
 vencimento corrompidas vetando a carteira, setup exigido no candle do dia e
 linhas corrompidas do provedor derrubando ativos inteiros. Sem rede."""
+from datetime import date
 from unittest.mock import Mock
 
 import numpy as np
@@ -165,3 +166,98 @@ def test_vencimento_corrompido_como_o_caso_real_nao_veta_a_carteira():
     assert r["permite_nova_operacao"]
     assert any("vencimento" in a.lower() for a in r["alertas"])
     assert any("corrija o registro" in a for a in r["alertas"])
+
+
+# --- 5. candidato intacto sobrevive a queda do score para 6-7 ---------------
+
+def _ambiente_preservacao(monkeypatch, tmp_path):
+    """Relatorio com score 7 (caiu de 9) e candidato pendente intacto."""
+    import relatorio_diario as rd
+
+    class DataFixa(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 10, 2)
+
+    monkeypatch.setattr(rd, "date", DataFixa)
+    monkeypatch.setattr(rd.config, "EXIGIR_SETUP", True)
+    monkeypatch.setattr(rd.config, "NIVEL_DETALHE", 6, raising=False)
+
+    plano = dict(setup="rompimento", estado="candidato", direcao="venda",
+                 data_sinal="2026-09-30", gatilho=57.81, stop=59.88,
+                 alvo=53.67, risco_retorno=2.0, alvo_teorico=True,
+                 risco_retorno_min=2.0, distancia_max_atr=0.5)
+    proposta = {"ticker": "JBSS32", "direcao": "venda", "estado_entrada": "candidato",
+                "preco_entrada": 57.81, "stop": 59.88, "alvo": 53.67,
+                "data_proposta": "2026-10-01", "plano_setup": dict(plano)}
+    dados = {"JBSS32": proposta}
+    monkeypatch.setattr(rd, "carregar_propostas", lambda: dict(dados))
+    gravadas = {}
+    monkeypatch.setattr(rd, "salvar_propostas", Mock(
+        side_effect=lambda p: gravadas.update(dict(p))))
+    monkeypatch.setattr(rd, "carregar_posicoes", Mock(return_value={}))
+    monkeypatch.setattr(rd, "checar_risco_noticias", Mock(
+        return_value={"bloquear_entrada": False, "noticias": []}))
+    monkeypatch.setattr(rd, "checar_resultado_proximo", Mock(
+        return_value={"tem_resultado_proximo": False}))
+    monkeypatch.setattr(rd, "sugerir_parametros_opcao_com_preco", Mock(
+        return_value={"tipo_opcao": "PUT", "strike_sugerido_aprox": 57,
+                      "vencimento_sugerido": "2026-10-20", "premio": 0.4}))
+    monkeypatch.setattr(rd, "calcular_tamanho_posicao", Mock(
+        return_value={"quantidade_acoes": 100, "valor_posicao": 5900,
+                      "valor_em_risco": 100, "pct_capital_em_risco": 1}))
+    # Candle do sinal (09-30) + posteriores: venda com gatilho 57.81 e stop
+    # 59.88 exige posteriores com high < stop e low > gatilho (nao tocaram).
+    df = pd.DataFrame(
+        dict(open=[60.0, 59.2, 59.1], high=[60.5, 59.5, 59.6],
+             low=[59.9, 58.0, 58.2], close=[60.2, 59.0, 59.3],
+             volume=[1000., 1000., 1000.],
+             atr=[0.5, 0.5, 0.5], suporte=[58.0, 58.0, 58.0],
+             resistencia=[60.5, 60.5, 60.5]),
+        index=pd.to_datetime(["2026-09-30", "2026-10-01", "2026-10-02"]))
+    resultado = dict(ticker="JBSS32", direcao="venda", score=7,
+                     preco=59.3, motivos=[], df=df,
+                     score_bruto=7)
+    monkeypatch.setattr(rd, "_classificar_setup_recente",
+                        Mock(return_value=dict(setup=None, estado="aguardar",
+                                               motivo="Sem novo padrao")))
+    return rd, resultado, proposta, gravadas, plano
+
+
+def test_score_7_com_setup_intacto_preserva_candidato(monkeypatch, tmp_path):
+    rd, resultado, proposta, gravadas, plano = _ambiente_preservacao(monkeypatch, tmp_path)
+    rd.montar_bloco_resumo(resultado, {}, 6)
+    assert resultado["estado_entrada"] == "candidato"
+    assert resultado["veredito"]["veredito"] == "CANDIDATO"
+    assert resultado["plano_setup"] == plano
+    assert "intacto" in resultado["veredito"]["descricao"]
+    # Sem re-salvar (data_proposta original preservada) e sem remover:
+    assert gravadas == {}
+    assert proposta["data_proposta"] == "2026-10-01"
+
+
+def test_score_5_remove_candidato(monkeypatch, tmp_path):
+    rd, resultado, _, gravadas, _ = _ambiente_preservacao(monkeypatch, tmp_path)
+    resultado["score"] = 5
+    resultado["score_bruto"] = 5
+    rd.montar_bloco_resumo(resultado, {}, 6)
+    assert resultado["estado_entrada"] == "aguardar"
+    assert gravadas == {}  # propostas salvas sem o candidato
+
+
+def test_direcao_trocada_remove_candidato(monkeypatch, tmp_path):
+    rd, resultado, _, gravadas, _ = _ambiente_preservacao(monkeypatch, tmp_path)
+    resultado["direcao"] = "compra"
+    rd.montar_bloco_resumo(resultado, {}, 6)
+    assert resultado["estado_entrada"] == "aguardar"
+    assert gravadas == {}
+
+
+def test_posicao_no_mesmo_ticker_remove_candidato_preservado(monkeypatch, tmp_path):
+    rd, resultado, _, gravadas, _ = _ambiente_preservacao(monkeypatch, tmp_path)
+    monkeypatch.setattr(rd, "carregar_posicoes", Mock(return_value={
+        "JBSS32": {"ticker": "JBSS32", "direcao": "venda"}}))
+    rd.montar_bloco_resumo(resultado, {}, 6)
+    assert resultado["veredito"]["veredito"] == "EVITAR"
+    assert "Ja existe posicao" in resultado["motivo_bloqueio"]
+    assert gravadas == {}

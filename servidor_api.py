@@ -34,8 +34,10 @@ IA travada ocupa o unico worker, mas nao bloqueia ACK nem health HTTP.
 Importar app via WSGI nao executa restauracao/registro e deixa ready indisponivel;
 o comando de deploy suportado continua sendo python servidor_api.py.
 GITHUB_TOKEN continua opcional; sem ele o disco efemero nao tem restauracao
-remota. Com token, erro de download/validacao interrompe startup em vez de
-servir estado possivelmente desatualizado; 404 mantem o comportamento legado.
+remota. Com token, o download tenta 3 vezes por arquivo; falha final inicia o
+servidor com o ESTADO LOCAL e aviso em log (um bot morto recebe nada: melhor
+degradar a persistencia do que perder todos os comandos). /carteira mostra o
+estado carregado; conferir os logs. 404 mantem o comportamento legado.
 """
 
 import hmac
@@ -104,37 +106,50 @@ def _baixar_estado_do_github():
     for arquivo in ("posicoes.json", "propostas.json"):
         url = f"https://api.github.com/repos/{repo}/contents/{arquivo}"
         temporario = None
-        try:
-            resp = req.get(url, headers=headers, params={"ref": "main"}, timeout=(5, 15))
-            if resp.status_code == 200:
-                import base64
-                conteudo = base64.b64decode(resp.json().get("content", "")).decode("utf-8")
-                dados = json.loads(conteudo)
-                if not isinstance(dados, dict) or not all(isinstance(v, dict) for v in dados.values()):
-                    raise ValueError("Estado deve ser um mapa de registros JSON")
-                # Mesmo diretorio para replace atomico; {} e um estado valido.
-                with tempfile.NamedTemporaryFile(
-                    mode="w", encoding="utf-8", dir=os.path.dirname(os.path.abspath(arquivo)),
-                    prefix=f".{arquivo}.", suffix=".tmp", delete=False,
-                ) as f:
-                    temporario = f.name
-                    json.dump(dados, f, ensure_ascii=False, allow_nan=False)
-                    f.flush()
-                    os.fsync(f.fileno())
-                os.replace(temporario, arquivo)
-                temporario = None
-                logger.info("Estado restaurado do GitHub: %s", arquivo)
-            elif resp.status_code == 404:
-                logger.info("Arquivo %s ainda não existe no GitHub — estado local mantido", arquivo)
-            else:
-                sucesso = False
-                logger.warning("Falha ao restaurar %s: HTTP %s", arquivo, resp.status_code)
-        except Exception as e:
+        arquivo_ok = False
+        # Falha transitória (rede, rate limit, GitHub instável) não pode matar
+        # o startup: tenta 3 vezes antes de declarar o arquivo indisponível.
+        for tentativa in range(1, 4):
+            try:
+                resp = req.get(url, headers=headers, params={"ref": "main"}, timeout=(5, 15))
+                if resp.status_code == 200:
+                    import base64
+                    conteudo = base64.b64decode(resp.json().get("content", "")).decode("utf-8")
+                    dados = json.loads(conteudo)
+                    if not isinstance(dados, dict) or not all(isinstance(v, dict) for v in dados.values()):
+                        raise ValueError("Estado deve ser um mapa de registros JSON")
+                    # Mesmo diretorio para replace atomico; {} e um estado valido.
+                    with tempfile.NamedTemporaryFile(
+                        mode="w", encoding="utf-8", dir=os.path.dirname(os.path.abspath(arquivo)),
+                        prefix=f".{arquivo}.", suffix=".tmp", delete=False,
+                    ) as f:
+                        temporario = f.name
+                        json.dump(dados, f, ensure_ascii=False, allow_nan=False)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(temporario, arquivo)
+                    temporario = None
+                    logger.info("Estado restaurado do GitHub: %s", arquivo)
+                    arquivo_ok = True
+                    break
+                elif resp.status_code == 404:
+                    logger.info("Arquivo %s ainda não existe no GitHub — estado local mantido", arquivo)
+                    arquivo_ok = True
+                    break
+                else:
+                    logger.warning("Falha ao restaurar %s (tentativa %d): HTTP %s",
+                                   arquivo, tentativa, resp.status_code)
+            except Exception as e:
+                logger.warning("Falha ao baixar %s (tentativa %d): %s",
+                               arquivo, tentativa, type(e).__name__)
+            finally:
+                if temporario is not None:
+                    os.unlink(temporario)
+                    temporario = None
+            if tentativa < 3:
+                time.sleep(min(2 * tentativa, 5))
+        if not arquivo_ok:
             sucesso = False
-            logger.warning("Falha ao baixar %s do GitHub: %s", arquivo, type(e).__name__)
-        finally:
-            if temporario is not None:
-                os.unlink(temporario)
     return sucesso
 
 
@@ -335,28 +350,41 @@ def _configurar_webhook():
     # Nao descarta updates pendentes. Lista explicita desfaz configuracao antiga.
     payload = {"url": destino, "allowed_updates": ["message"], "max_connections": 1,
                "secret_token": WEBHOOK_SECRET}
-    try:
-        r = requests.post(f"https://api.telegram.org/bot{TOKEN}/setWebhook", json=payload, timeout=(5, 15))
-        data = r.json()
-        if r.ok and data.get("ok"):
-            WEBHOOK_URL = destino
-            logger.info("Webhook registrado: %s", WEBHOOK_URL)
-            return True
-        else:
-            logger.warning("Falha ao registrar webhook: HTTP %s", r.status_code)
-            return False
-    except Exception as e:
-        logger.warning("Erro ao registrar webhook: %s", type(e).__name__)
-        return False
+    # Falha transitória não pode matar o startup: 3 tentativas com backoff.
+    for tentativa in range(1, 4):
+        try:
+            r = requests.post(f"https://api.telegram.org/bot{TOKEN}/setWebhook", json=payload, timeout=(5, 15))
+            data = r.json()
+            if r.ok and data.get("ok"):
+                WEBHOOK_URL = destino
+                logger.info("Webhook registrado: %s", WEBHOOK_URL)
+                return True
+            logger.warning("Falha ao registrar webhook (tentativa %d): HTTP %s",
+                           tentativa, r.status_code)
+        except Exception as e:
+            logger.warning("Erro ao registrar webhook (tentativa %d): %s",
+                           tentativa, type(e).__name__)
+        if tentativa < 3:
+            time.sleep(min(2 * tentativa, 5))
+    return False
 
 
 if __name__ == "__main__":
     logger.info("Iniciando servidor B3-bot...")
-    # Restaura posições/propostas do GitHub antes de atender comandos
+    # Restaura posições/propostas do GitHub antes de atender comandos.
+    # NADA aqui pode derrubar o servidor em crash-loop: um bot morto não
+    # recebe nenhum comando, o que e pior do que degradar a persistencia.
     _estado_pronto = _baixar_estado_do_github()
-    if not _estado_pronto or not _configurar_webhook():
-        raise SystemExit("Startup incompleto: restauracao/configuracao falhou.")
-
+    if not _estado_pronto:
+        logger.warning("Restauracao do GitHub falhou apos retries — iniciando com o "
+                       "estado LOCAL. Posicoes/propostas podem estar desatualizadas; "
+                       "conferir /carteira e os logs do servidor.")
+    if not _configurar_webhook():
+        # O registro pode ja existir de um boot anterior (o Telegram persiste o
+        # webhook). Inicia assim mesmo; /ready confirma o registro real.
+        logger.warning("setWebhook falhou apos retries — iniciando assim mesmo. "
+                       "Se o webhook nao estiver registrado, comandos nao chegam; "
+                       "confira /ready e os logs.")
     porta = int(os.environ.get("PORT", "8080"))
     logger.info("Servidor rodando na porta %s", porta)
     app.run(host="0.0.0.0", port=porta, threaded=True)

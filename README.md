@@ -166,6 +166,30 @@ O mapa setorial e manual; nao estima correlacao nem delta equivalente das opcoes
 Cada candidato e avaliado individualmente contra posicoes abertas, nao todos
 simultaneamente: recalcule antes de abrir uma segunda operacao.
 
+### Ciclo do candidato (consistencia dia a dia)
+
+O candidato e governado pelo SETUP, nao pelo ruido diario do score:
+
+- Score >= 8 + setup: CANDIDATO novo (ou reconfirmado), com plano e validade.
+- Score cai para 6-7 com o setup AINDA INTACTO (stop, alvo e gatilho nao
+  tocados): o candidato e PRESERVADO, exibido como CANDIDATO com "score hoje
+  X/10". Nao some, nao re-gera, nao re-salva a data.
+- Score < 6, direcao trocada, setup invalidado/expirado ou posicao existente
+  no mesmo ticker: candidato REMOVIDO.
+- Novos candidatos sempre exigem score >= 8; a preservacao nao fabrica sinal.
+
+### Render: disponibilidade
+
+Plano gratuito "dorme" apos ~15 min sem trafego; cada acordada reinstala
+dependencias (1-3 min). O workflow keep_alive (ping a cada 10 min) mantem o
+servico acordado para respostas rapidas no Telegram. Se o ping falhar, o
+servico pode estar acordando ou indisponivel.
+O startup NAO derruba o servidor por falha transitória: restauracao do GitHub
+e setWebhook tentam 3 vezes; na falha final, o servico inicia com o estado
+local e aviso em log — conferir /carteira (dados podem estar desatualizados)
+e os logs do Render. Um token GITHUB_TOKEN expirado no Render degrada a
+persistencia remota, nao derruba o bot. Alternativa definitiva: plano pago.
+
 ### Opcoes com Ate Um Mes de Vencimento
 
 Novas sugestoes usam **14 a 30 dias corridos**, calculados pela data real do

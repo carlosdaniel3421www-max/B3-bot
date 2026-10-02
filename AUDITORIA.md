@@ -152,6 +152,33 @@ operacional de opcoes <=30d); os numeros de 10 sessoes seguem informativos.
 Nenhum limite de risco foi afrouxado: score minimo, setup, gatilho, exaustao,
 carteira e liquidez continuam exigidos. Suite pos-correcao: 1779 testes.
 
+## Revisao Pos-Producao (Render + Ciclo do Candidato)
+
+Duas queixas investigadas em producao:
+
+1. **Render inalcançavel.** /health retornava 503/timeout. Causas corrigidas:
+   - O startup matava o servidor (`SystemExit`) quando a restauracao do GitHub
+     ou o setWebhook falhavam (token expirado, rede, rate limit) — crash-loop:
+     um bot morto nao recebe nenhum comando. Agora: 3 tentativas por arquivo e
+     por registro; falha final INICIA com o estado local e aviso em log.
+   - Plano gratuito do Render dorme apos ~15 min e reinstala dependencias a
+     cada acordada (1-3 min). Adicionado workflow keep_alive (ping /health a
+     cada 10 min) para manter o servico acordado; render_start.sh so reinstala
+     quando falta dependencia. Alternativa definitiva: plano pago do Render.
+2. **Candidato aparecia e sumia (inconsistencia).** O candidato JBSS32 foi
+   removido no relatorio seguinte porque o score caiu de 10 para 7, mesmo com
+   o setup intacto (preco nao tinha tocado stop/alvo/gatilho). O ciclo do
+   candidato era governado pelo ruido diario do score. Correcao: candidato
+   pendente INTACTO sobrevive a queda para 6-7, exibido como CANDIDATO com
+   "score hoje 7/10", sem re-gerar, re-salvar ou remover. Remocao continua
+   para: score < 6, direcao trocada, setup invalidado/expirado ou posicao
+   existente no mesmo ticker. Novos candidatos continuam exigindo score >= 8.
+
+Validacao: 1783 testes passaram. O ping de keep-alive depende do cron do
+GitHub Actions (pode atrasar alguns minutos; lacunas maiores que 15 min
+acordam o servico com boot lento). Sem token expirado detectado diretamente:
+o GITHUB_TOKEN do Render precisa estar valido para restaurar estado remoto.
+
 ## Politica de Prazo Curto
 
 Atualizacao apos esclarecer que o operador compra opcoes com ate um mes restante:

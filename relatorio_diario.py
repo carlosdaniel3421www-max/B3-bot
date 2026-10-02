@@ -153,18 +153,25 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
                     f"resultado trimestral em {resultado_trimestral['dias_ate_resultado']} dia(s) "
                     f"({resultado_trimestral['data_resultado']})"
                 )
+    # Candidato pendente intacto: sobrevive a queda do score para 6-7, porque
+    # o ciclo do candidato e governado pelo SETUP (intacto/expirado/tocado),
+    # nao pelo ruido diario do score. Sem isso, o candidato aparecia e sumia
+    # de um dia pro outro. Abaixo de 6, direcao trocada ou setup invalidado,
+    # a remocao continua.
+    candidato_pendente = None
+    if (config.EXIGIR_SETUP and direcao in ("compra", "venda") and not cancelamento):
+        proposta_pendente = carregar_propostas().get(ticker.upper(), {})
+        if (isinstance(proposta_pendente, dict)
+                and proposta_pendente.get("estado_entrada") == "candidato"
+                and proposta_pendente.get("direcao") == direcao):
+            candidato_pendente = reutilizar_candidato(
+                proposta_pendente.get("plano_setup"), resultado["df"], direcao, date.today(),
+            )
     if resultado["entrada_permitida"] and not cancelamento and config.EXIGIR_SETUP:
         plano_setup = _classificar_setup_recente(resultado["df"], direcao)
-        if plano_setup["estado"] != "candidato":
-            proposta = carregar_propostas().get(ticker.upper(), {})
-            if (isinstance(proposta, dict) and proposta.get("estado_entrada") == "candidato"
-                    and proposta.get("direcao") == direcao):
-                anterior = reutilizar_candidato(
-                    proposta.get("plano_setup"), resultado["df"], direcao, date.today(),
-                )
-                if anterior is not None:
-                    plano_setup = anterior
-                    plano_reutilizado = True
+        if plano_setup["estado"] != "candidato" and candidato_pendente is not None:
+            plano_setup = candidato_pendente
+            plano_reutilizado = True
         if plano_setup["estado"] == "candidato":
             try:
                 idade = (date.today() - _data(plano_setup.get("data_sinal"))).days
@@ -191,6 +198,23 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
                 resultado["estado_entrada"] = "candidato"
                 veredito = {"veredito": "CANDIDATO", "emoji": "🟡",
                             "descricao": "Setup identificado: aguarde gatilho e valide risco antes de operar."}
+    elif (candidato_pendente is not None and score >= nivel_detalhe
+          and not resultado["entrada_permitida"]):
+        # Score caiu para 6-7 mas o setup segue intacto: preserva o candidato
+        # com o plano original (sem re-gerar, sem remover, sem re-salvar).
+        carteira_atual = carregar_posicoes()
+        resultado["carteira_atual"] = carteira_atual
+        if ticker in carteira_atual:
+            cancelamento = "Ja existe posicao neste ativo; candidato descartado."
+        else:
+            plano_setup = candidato_pendente
+            plano_reutilizado = True
+            resultado["plano_setup"] = plano_setup
+            resultado["estado_entrada"] = "candidato"
+            veredito = {"veredito": "CANDIDATO", "emoji": "🟡",
+                        "descricao": (
+                            f"Setup intacto de {plano_setup.get('data_sinal')}: score hoje "
+                            f"{score}/10. Aguarde gatilho e valide risco antes de operar.")}
     if cancelamento:
         resultado["entrada_permitida"] = False
         resultado["motivo_bloqueio"] = cancelamento
@@ -198,7 +222,9 @@ def montar_bloco_resumo(resultado: dict, estado: dict, nivel_detalhe: int,
     resultado["veredito"] = veredito
     resultado["noticias"] = risco_noticias.get("noticias", [])
 
-    if not resultado["entrada_permitida"]:
+    # Candidato preservado (score caiu para 6-7 com setup intacto) NAO e
+    # removido: o ciclo dele e governado pelo setup, nao pelo ruido diario.
+    if not resultado["entrada_permitida"] and resultado.get("estado_entrada") != "candidato":
         try:
             propostas = carregar_propostas()
             if ticker.upper() in propostas:

@@ -1,0 +1,34 @@
+name: Keep Alive Render
+
+# O plano gratuito do Render "dorme" apos ~15 min sem trafego, e cada
+# acordada reinstala dependencias (1-3 min de boot). Pings a cada 10 min
+# mantem o servico acordado, com respostas rapidas no Telegram.
+# O plano gratuito da ~750h/mes de instancia; um servico 24/7 usa ~730h.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: keep-alive-render
+      cancel-in-progress: true
+    env:
+      # Opcional: segredo RENDER_URL prevalece; o padrao e a URL publica atual.
+      RENDER_URL: ${{ secrets.RENDER_URL }}
+    steps:
+      - name: Ping /health
+        run: |
+          destino="${RENDER_URL:-https://b3-bot-qtvg.onrender.com}"
+          codigo=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 "$destino/health" || true)
+          if [ "$codigo" = "200" ]; then
+            echo "Servico acordado (HTTP $codigo)."
+          else
+            echo "::warning::Ping respondeu HTTP $codigo — o servico pode estar acordando ou indisponivel."
+          fi
