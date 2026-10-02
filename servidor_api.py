@@ -305,17 +305,32 @@ def health():
 
 @app.route("/ready", methods=["GET"])
 def ready():
+    """Readiness com diagnóstico: cada verificação exposta por campo, sem
+    segredos (a URL do webhook já é pública em /). Permite depurar de fora
+    qual etapa falhou: restauração, registro ou conferência do Telegram."""
     import requests
 
+    detalhes = {
+        "estado_pronto": _estado_pronto,
+        "config_ok": _configuracao_valida(),
+        "webhook_url_set": bool(WEBHOOK_URL),
+        "getwebhook_ok": None,
+        "url_confere": None,
+    }
     pronto = False
     if _estado_pronto and _configuracao_valida() and WEBHOOK_URL:
         try:
             r = requests.get(f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo", timeout=(5, 15))
             data = r.json()
-            pronto = bool(r.ok and data.get("ok") and data.get("result", {}).get("url") == WEBHOOK_URL)
+            detalhes["getwebhook_ok"] = bool(r.ok and data.get("ok"))
+            detalhes["url_confere"] = bool(
+                detalhes["getwebhook_ok"] and data.get("result", {}).get("url") == WEBHOOK_URL)
+            pronto = detalhes["url_confere"]
         except (requests.RequestException, ValueError, AttributeError):
             pass
-    return jsonify({"status": "ok" if pronto else "unavailable", "webhook": pronto}), 200 if pronto else 503
+    detalhes["status"] = "ok" if pronto else "unavailable"
+    detalhes["webhook"] = pronto
+    return jsonify(detalhes), 200 if pronto else 503
 
 
 @app.route("/", methods=["GET"])
