@@ -5,7 +5,7 @@
     "data_primeiro_alerta": "2026-11-05",
     "score_history": [
       {
-        "score": 8,
+        "score": 6,
         "direcao": "venda"
       },
       {
@@ -17,7 +17,7 @@
         "direcao": "venda"
       }
     ],
-    "ultima_data_score": "2026-11-10"
+    "ultima_data_score": "2026-11-11"
   },
   "USIM5": {
     "score": 8,
@@ -25,7 +25,7 @@
     "data_primeiro_alerta": "2026-10-27",
     "score_history": [
       {
-        "score": 9,
+        "score": 8,
         "direcao": "venda"
       },
       {
@@ -37,7 +37,7 @@
         "direcao": "venda"
       }
     ],
-    "ultima_data_score": "2026-11-10"
+    "ultima_data_score": "2026-11-11"
   },
   "SUZB3": {
     "score": 7,
@@ -45,29 +45,25 @@
     "data_primeiro_alerta": "2026-11-10",
     "score_history": [
       {
-        "score": 5,
-        "direcao": "venda"
-      },
-      {
         "score": 6,
         "direcao": "venda"
       },
       {
         "score": 7,
         "direcao": "compra"
+      },
+      {
+        "score": 7,
+        "direcao": "compra"
       }
     ],
-    "ultima_data_score": "2026-11-10"
+    "ultima_data_score": "2026-11-11"
   },
   "BBDC4": {
     "score": 6,
-    "direcao": "compra",
-    "data_primeiro_alerta": "2026-10-30",
+    "direcao": "venda",
+    "data_primeiro_alerta": "2026-11-11",
     "score_history": [
-      {
-        "score": 5,
-        "direcao": "compra"
-      },
       {
         "score": 4,
         "direcao": "compra"
@@ -75,14 +71,18 @@
       {
         "score": 5,
         "direcao": "venda"
+      },
+      {
+        "score": 6,
+        "direcao": "venda"
       }
     ],
-    "ultima_data_score": "2026-11-10"
+    "ultima_data_score": "2026-11-11"
   },
   "PETR4": {
     "score_history": [
       {
-        "score": 4,
+        "score": 5,
         "direcao": "compra"
       },
       {
@@ -94,79 +94,68 @@
         "direcao": "compra"
       }
     ],
-    "ultima_data_score": "2026-11-10"
-  },
-  "PRIO3": {
-    "score_history": [
-      {
-        "score": 5,
-        "direcao": "compra"
-      },
-      {
-        "score": 5,
-        "direcao": "compra"
-      },
-      {
-        "score": 4,
-        "direcao": "compra"
-      }
-    ],
-    "ultima_data_score": "2026-11-10"
-  },
-  "GGBR4": {
-    "score_history": [
-      {
-        "score": 4,
-        "direcao": "compra"
-      },
-      {
-        "score": 4,
-        "direcao": "compra"
-      },
-      {
-        "score": 1,
-        "direcao": "neutro"
-      }
-    ],
-    "ultima_data_score": "2026-11-10"
-  },
-  "JBSS32": {
-    "score": 6,
-    "direcao": "compra",
-    "data_primeiro_alerta": "2026-11-10",
-    "score_history": [
-      {
-        "score": 6,
-        "direcao": "compra"
-      }
-    ],
-    "ultima_data_score": "2026-11-10"
+    "ultima_data_score": "2026-11-11"
   },
   "ITUB4": {
     "score_history": [
       {
         "score": 1,
         "direcao": "neutro"
+      },
+      {
+        "score": 1,
+        "direcao": "neutro"
       }
     ],
-    "ultima_data_score": "2026-11-10"
+    "ultima_data_score": "2026-11-11"
   },
   "RAIL3": {
     "score_history": [
       {
         "score": 1,
         "direcao": "neutro"
-      }
-    ],
-    "ultima_data_score": "2026-11-10"
-  },
-  "LREN3": {
-    "score_history": [
+      },
       {
         "score": 1,
         "direcao": "neutro"
       }
     ],
-    "ultima_data_score": "2026-11-10"
+    "ultima_data_score": "2026-11-11"
+  },
+  "EQTL3": {
+    "score_history": [
+      {
+        "score": 5,
+        "direcao": "compra"
+      }
+    ],
+    "ultima_data_score": "2026-11-11"
+  },
+  "AXIA3": {
+    "score_history": [
+      {
+        "score": 5,
+        "direcao": "venda"
+      }
+    ],
+    "ultima_data_score": "2026-11-11"
+  },
+  "RENT3": {
+    "score_history": [
+      {
+        "score": 4,
+        "direcao": "compra"
+      }
+    ],
+    "ultima_data_score": "2026-11-11"
+  },
+  "ABEV3": {
+    "score_history": [
+      {
+        "score": 0,
+        "direcao": "neutro"
+      }
+    ],
+    "ultima_data_score": "2026-11-11"
   }
 }
